@@ -26,8 +26,11 @@ BACKGROUND: RGB = (16, 23, 27)
 TILE: RGB = (20, 29, 34)
 GRID: RGB = (167, 184, 182)
 WHITE: RGB = (239, 246, 232)
-MINT: RGB = (178, 239, 200)
-RED: RGB = (255, 82, 105)
+MINT: RGB = (114, 214, 156)
+RED: RGB = (217, 107, 158)
+HEART_RED: RGB = (204, 67, 95)
+HEART_SHADOW: RGB = (117, 45, 66)
+HEART_LIGHT: RGB = (246, 157, 171)
 MUTED: RGB = (46, 62, 67)
 
 
@@ -220,6 +223,44 @@ def _animated_path(
     return _slice_path(extended, travel, travel + length), color, shake
 
 
+def _stroke_pixels(points: list[Cell]) -> set[Cell]:
+    """Two-pixel directed orthogonal stroke with one-pixel bevelled corners.
+
+    The second pixel sits on the segment's right-hand normal. Rotating the
+    path therefore rotates its exact binary raster, including even-width
+    strokes. Pillow's direction-dependent thick diagonal lines are avoided.
+    """
+    ink: set[Cell] = set()
+    for a, b in zip(points, points[1:]):
+        length = abs(b[0] - a[0]) + abs(b[1] - a[1])
+        if not length:
+            continue
+        dx, dy = (b[0] - a[0]) // length, (b[1] - a[1]) // length
+        for step in range(length + 1):
+            x, y = a[0] + dx * step, a[1] + dy * step
+            ink.add((x, y))
+            ink.add((x - dy, y + dx))
+    for a, corner, b in zip(points, points[1:], points[2:]):
+        cross = ((corner[0] - a[0]) * (b[1] - corner[1])
+                 - (corner[1] - a[1]) * (b[0] - corner[0]))
+        if cross > 0:
+            # The outside pixel is clipped, not interpolated or rounded by a
+            # vector renderer. The underlying motion path remains orthogonal.
+            ink.discard(corner)
+    return ink
+
+
+def _head_pixels(tip: Cell, direction: Cell) -> set[Cell]:
+    """Rotate one canonical, symmetric chevron into any cardinal direction."""
+    dx, dy = direction
+    ink = set()
+    for back in range(5):
+        for across in (-back, 1 - back, back, back + 1):
+            ink.add((tip[0] - dx * back - dy * across,
+                     tip[1] - dy * back + dx * across))
+    return ink
+
+
 def _draw_arrow(
     draw: ImageDraw.ImageDraw,
     points: list[Cell],
@@ -228,14 +269,12 @@ def _draw_arrow(
     offset: Cell = (0, 0),
 ) -> None:
     shifted = [(x + offset[0], y + offset[1]) for x, y in points]
-    # Clear a narrow gutter through the grid, keeping arrows readable at bends.
-    draw.line(shifted, fill=BACKGROUND, width=5)
-    draw.line(shifted, fill=color, width=3)
-    dx, dy = direction
-    tip_x, tip_y = shifted[-1]
-    left = tip_x - dx * 4 - dy * 4, tip_y - dy * 4 + dx * 4
-    right = tip_x - dx * 4 + dy * 4, tip_y - dy * 4 - dx * 4
-    draw.line((left, (tip_x, tip_y), right), fill=color, width=2)
+    ink = _stroke_pixels(shifted) | _head_pixels(shifted[-1], direction)
+    # A one-pixel moat clears grid dashes without making the thin body fuzzy.
+    gutter = {(x + dx, y + dy) for x, y in ink
+              for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))}
+    draw.point(list(gutter), fill=BACKGROUND)
+    draw.point(list(ink), fill=color)
 
 
 def render_board(
@@ -299,12 +338,21 @@ _HEART_OUTLINE = _HEART_PIXELS - _HEART_FILL
 HEART_IMAGE_SIZE = (47, 23)
 
 
+def _heart_color(x: int, y: int) -> RGB:
+    """Small fixed highlights and lower/right shadow, with no smooth shading."""
+    if (x, y) in {(2, 2), (3, 2), (2, 3), (9, 2)}:
+        return HEART_LIGHT
+    if y >= 7 or (x >= 9 and y >= 4):
+        return HEART_SHADOW
+    return HEART_RED
+
+
 def render_hearts(
     lives: int,
     progress: float | None = None,
     lost_index: int | None = None,
 ) -> Image.Image:
-    """Draw three white-outline hearts and a falling, split red interior.
+    """Draw three shaded, white-outline hearts and falling, split interiors.
 
     ``lives`` is the post-hit count. ``lost_index`` is zero based, normally
     equal to lives. The original outline is painted last and remains intact
@@ -321,7 +369,7 @@ def render_hearts(
         ox, oy = 1 + 16 * index, 1
         if index < lives:
             for x, y in _HEART_FILL:
-                draw.point((ox + x, oy + y), fill=RED)
+                draw.point((ox + x, oy + y), fill=_heart_color(x, y))
         elif index == lost_index and p is not None and p < 0.92:
             separation = round(2 * p)
             drop = round(8 * p * p)
@@ -334,7 +382,7 @@ def render_hearts(
                 # checker pattern instead of introducing alpha / blur.
                 if p > 0.70 and (x + y) % 3 < floor((p - 0.70) * 14):
                     continue
-                draw.point((ox + x + side * separation, oy + y + drop), fill=RED)
+                draw.point((ox + x + side * separation, oy + y + drop), fill=_heart_color(x, y))
         for x, y in _HEART_OUTLINE:
             draw.point((ox + x, oy + y), fill=WHITE)
     return image

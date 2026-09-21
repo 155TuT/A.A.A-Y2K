@@ -10,6 +10,10 @@ from arrow_y2k.pixels import (
     BACKGROUND,
     MINT,
     RED,
+    HEART_RED,
+    HEART_SHADOW,
+    HEART_LIGHT,
+    _stroke_pixels,
     WHITE,
     _animated_path,
     _arrow_path,
@@ -108,9 +112,9 @@ def test_lost_heart_keeps_outline_and_red_fragments_fall_then_disappear():
     assert before.size == falling.size == finished.size == (47, 23)
     outline = [(x, y) for y in range(23) for x in range(33, 47) if before.getpixel((x, y)) == WHITE]
     assert all(falling.getpixel(point) == WHITE == finished.getpixel(point) for point in outline)
-    assert RED in palette(falling.crop((31, 12, 47, 23)))
-    assert RED not in palette(finished.crop((32, 0, 47, 23)))
-    assert before.getpixel((35, 3)) == RED
+    assert {HEART_RED, HEART_SHADOW} & palette(falling.crop((31, 12, 47, 23)))
+    assert not {HEART_RED, HEART_SHADOW, HEART_LIGHT} & palette(finished.crop((32, 0, 47, 23)))
+    assert before.getpixel((35, 3)) == HEART_LIGHT
     assert finished.getpixel((35, 3)) == BACKGROUND
 
 
@@ -123,3 +127,31 @@ def test_editor_canvas_has_stable_dimensions_even_when_mask_empty():
 def test_invalid_life_count_is_a_programming_error(lives):
     with pytest.raises(ValueError):
         render_hearts(lives)
+
+
+def test_all_arrow_orientations_are_exact_quarter_rotations():
+    def ink(direction):
+        image = render_board(board((arrow(delta=direction),)))
+        return {(x, y) for x in range(17) for y in range(17) if image.getpixel((x, y)) == WHITE}
+    expected = ink((1, 0))
+    assert {y for x, y in expected if x == 5} == {8, 9}
+    for direction in ((0, 1), (-1, 0), (0, -1), (1, 0)):
+        expected = {(16 - y, x) for x, y in expected}
+        assert ink(direction) == expected
+
+
+def test_thin_path_corner_has_single_pixel_bevel_not_diagonal_shortcut():
+    ink = _stroke_pixels([(4, 8), (8, 8), (8, 12)])
+    assert (8, 8) not in ink
+    assert (7, 8) in ink and (8, 9) in ink
+    assert {(8, 10), (7, 10)} <= ink
+    assert {(5, 8), (5, 9)} <= ink
+
+
+def test_heart_shading_is_discrete_and_keeps_outline_identical():
+    alive = render_hearts(3)
+    empty = render_hearts(0)
+    assert {HEART_RED, HEART_SHADOW, HEART_LIGHT} <= palette(alive)
+    assert palette(alive) <= {BACKGROUND, WHITE, HEART_RED, HEART_SHADOW, HEART_LIGHT}
+    white = lambda image: {(x, y) for x in range(47) for y in range(23) if image.getpixel((x, y)) == WHITE}
+    assert white(alive) == white(empty)

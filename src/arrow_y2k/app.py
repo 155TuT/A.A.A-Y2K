@@ -1,147 +1,212 @@
-"""The game's sole UI controller: Textual messages, widgets and animation timer."""
+"""Compose independent rules, storage, achievements, audio and Textual pages."""
 from __future__ import annotations
-
+import math
+import secrets
 import time
+from collections import deque
 from pathlib import Path
-from collections.abc import Callable
-
+from textual.app import App
+from textual.binding import Binding
 from textual import on
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Select, Static
+from textual.widgets import Button, Input, Select, Static, Switch
 
-from .generation import GenerateConfig, generate, make_level, template_mask
-from .model import GameSession
-from .persistence import load_map, save_map
+from .campaign import GameRun
+from .catalog import preset_maps
+from .generation import GenerateConfig
+from .storage import GameStore, DomainStorageError
+from .achievements import AchievementService
+from .audio import AudioController
 from .pixels import Animation
 from .solver import solve
-from .widgets import BoardView, HeartsView
+from .pages import PAGES, MODE_NAMES
 
 
 class ArrowApp(App):
-    """Composition root. Domain rules never depend on Textual or the host."""
-
     CSS_PATH = "game.tcss"
-    TITLE = "一箭又一箭"
+    TITLE = "ARROW.AFTER.ARROW-Y2K"
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
-        ("r", "restart", "重来"), ("h", "hint", "提示"),
-        ("s", "solve", "自动求解"), ("e", "editor", "造地图"),
-        ("n", "next_level", "下一关"), ("f6", "resolution", "分辨率"),
-        ("escape", "back", "返回"), ("ctrl+q", "quit", "退出"),
+        Binding("escape", "menu", "菜单", priority=True),
+        Binding("ctrl+q", "quit", "退出", priority=True),
+        ("h", "hint", "提示"), ("s", "solve", "演示"), ("r", "restart", "重来"),
     ]
 
-    def __init__(self, *, native: bool = False, level: int = 1, seed: str = "2026"):
+    def __init__(self, *, native=False, seed=None, data_dir=None, clock=time.monotonic):
         super().__init__()
         self.native = native
-        self.level_index = level
+        self.clock = clock
         self.seed = seed
-        self.level = make_level(level, seed=seed)
-        self.session = GameSession(self.level.board)
-        self.animation: Animation | None = None
-        self.animation_started = 0.0
-        self.animation_duration = 0.0
-        self.heart_progress: float | None = None
-        self.heart_started: float | None = None
-        self.lost_index: int | None = None
-        self.hovered: str | None = None
-        self.hint_id: str | None = None
-        self.failed_ids: set[str] = set()
-        self.cursor = min(self.level.board.mask, key=lambda p: (p[1], p[0]))
+        self.store = GameStore(Path(data_dir) if data_dir is not None else None)
+        self.achievements = AchievementService(self.store.profile)
+        cfg = self.store.settings
+        self.audio = AudioController(cfg.master_volume, cfg.effects_volume, cfg.muted)
+        self.resolution_name = cfg.resolution
+        self.host_action = None
+        self.game: GameRun | None = None
+        self.page = "home"
+        self._page_ready = False
+        self.paused_page = "home"
+        self.back_page = "home"
+        self.settings_section = "basic"
+        self.last_tick = self.clock()
+        self.autosave_elapsed = 0.0
+        self.animation = None
+        self.animation_elapsed = 0.0
+        self.animation_duration = .65
+        self.heart_progress = None
+        self.heart_elapsed = None
+        self.lost_index = None
+        self.hovered = self.hint_id = None
+        self.cursor = (0, 0)
+        self.failed_ids = set()
         self.auto_solving = False
-        self.assisted = False
-        self.editing = False
-        self.editor_mask = set(template_mask("heart", 9, 8))
-        self.editor_hover = None
+        self.message = ""
         self.painting = 0
-        self.host_action: Callable[[str], None] | None = None
-        self.resolution_name = "1280x720"
-        self.message = self.level.description
+        self.presets = preset_maps()
+        first = self.presets[0]
+        self.editor_selection = "preset:" + first.id
+        self.editor_name = first.name + " / 我的版本"
+        self.editor_difficulty = first.difficulty
+        self.editor_mask = set(first.mask)
+        self.editor_seed = "my-map"
+        self.editor_density, self.editor_length, self.editor_turns = 85, 12, 65
+        self.editor_path = str(self.store.root / "exports" / "my-map.json")
+        self.editor_hover = None
+        self.toast_queue = deque()
+        self.toast_text = ""
+        self.toast_until = 0.0
 
-    def compose(self) -> ComposeResult:
-        with Horizontal(id="titlebar"):
-            yield Static("[b]一箭又一箭[/b]  /  ARROW AFTER ARROW", id="brand")
-            yield Button(self.resolution_name, id="resolution")
-            yield Button("_", id="minimize", classes="window-button")
-            yield Button("X", id="close", classes="window-button")
-        with Horizontal(id="workspace"):
-            with Vertical(id="play-pane"):
-                yield Static(id="board-title")
-                yield BoardView(id="board")
-                yield Static(id="caption")
-            with Vertical(id="side"):
-                with Vertical(id="game-panel"):
-                    with Horizontal(id="level-tabs"):
-                        yield Button("01", id="level-1")
-                        yield Button("02", id="level-2")
-                        yield Button("03", id="level-3")
-                    yield Static(id="level-name")
-                    yield Static("LIFE / 生命", id="lives-label")
-                    yield HeartsView(id="hearts")
-                    yield Static(id="stats")
-                    yield Static(id="status")
-                    with Horizontal(classes="button-row"):
-                        yield Button("提示 H", id="hint")
-                        yield Button("演示 S", id="solve")
-                    with Horizontal(classes="button-row"):
-                        yield Button("重来 R", id="restart")
-                        yield Button("下一关", id="next", classes="primary")
-                    yield Button("+ 制作地图", id="custom")
-                with Vertical(id="editor-panel", classes="hidden"):
-                    yield Select([(label, key) for label, key in [
-                        ("模板 / 方形", "square"), ("模板 / 长方形", "rectangle"),
-                        ("模板 / 心形", "heart"), ("模板 / 菱形", "diamond"),
-                        ("模板 / 环形", "ring"), ("模板 / 十字", "cross"),
-                    ]], value="heart", allow_blank=False, id="template")
-                    yield Static("SEED / 随机种子", classes="field-label")
-                    yield Input(self.seed, placeholder="任意文字或数字", id="seed")
-                    yield Static("密度% / 长度上限 / 转弯%", classes="field-label")
-                    with Horizontal(id="parameters"):
-                        yield Input("85", id="density", type="integer", max_length=3)
-                        yield Input("12", id="length", type="integer", max_length=2)
-                        yield Input("60", id="turns", type="integer", max_length=3)
-                    yield Static("MAP / 本地 JSON 路径", classes="field-label")
-                    yield Input("maps/my-map.json", id="map-path")
-                    with Horizontal(classes="button-row", id="file-actions"):
-                        yield Button("保存", id="save")
-                        yield Button("载入", id="load")
-                        yield Button("清空", id="clear")
-                    yield Static(id="editor-status")
-                    with Horizontal(classes="button-row"):
-                        yield Button("生成试玩", id="generate", classes="primary")
-                        yield Button("返回", id="back")
-                    yield Static("左键绘制 / 右键擦除\n支持拖动连续绘制", id="editor-help")
-        yield Static("H 提示   S 演示   R 重来     方向键 + Enter 选箭头", id="footer")
+    @property
+    def session(self):
+        return self.game.session if self.game is not None else None
 
-    def on_mount(self) -> None:
+    @property
+    def editing(self):
+        return self.page == "editor"
+
+    @property
+    def allow_window_drag(self):
+        return self.page not in ("game", "editor")
+
+    def on_mount(self):
+        self.push_screen(PAGES["home"]())
         self.set_interval(1 / 60, self.tick)
+        if self.store.warnings:
+            self.show_toast("数据提示", self.store.warnings[0])
+
+    def page_ready(self):
+        self._page_ready = True
         self.refresh_labels()
 
-    def refresh_labels(self) -> None:
-        if not self.is_mounted:
-            return
-        count = len(self.session.remaining)
-        initial = len(self.session.board.arrows)
-        title = "MAP STUDIO / 地图工坊" if self.editing else self.level.name
-        self.query_one("#board-title", Static).update(title)
-        self.query_one("#caption", Static).update(
-            "12 × 10 画布  /  每格只占用一次" if self.editing else "观察头部方向 · 点击箭头任意一格")
-        self.query_one("#level-name", Static).update(self.level.name)
-        self.query_one("#stats", Static).update(f"LEFT {count:02d} / {initial:02d}   ·   {len(self.session.board.mask)} 格")
-        self.query_one("#status", Static).update(self.message)
-        self.query_one("#editor-status", Static).update(f"已绘制 {len(self.editor_mask)} 格 · 生成后验证有解")
-        self.query_one("#next", Button).disabled = self.session.status != "won" or self.animation is not None
-        for key in ("hint", "solve"):
-            self.query_one(f"#{key}", Button).disabled = self.session.status != "playing"
-        self.query_one("#solve", Button).label = "停止 S" if self.auto_solving else "演示 S"
-        self.query_one("#resolution", Button).label = self.resolution_name if self.native else "终端模式"
-        for index in (1, 2, 3):
-            self.query_one(f"#level-{index}").set_class(index == self.level_index and self.level.name != "种子关卡", "level-selected")
-        self.query_one("#board").refresh()
-        self.query_one("#hearts").refresh()
+    def route(self, page):
+        self.consume_game_time()
+        if self.page == "editor":
+            self.capture_editor()
+        self._page_ready = False
+        self.page = page
+        self.painting = 0
+        self.last_tick = self.clock()
+        self.switch_screen(PAGES[page]())
 
-    def click_cell(self, cell) -> None:
-        if self.editing or self.animation is not None or self.session.status != "playing":
+    def q(self, selector, kind=Static):
+        return self.screen.query_one(selector, kind)
+
+    def set_text(self, selector, text):
+        matches = self.screen.query(selector)
+        if matches:
+            matches.first(Static).update(text)
+
+    def refresh_labels(self):
+        if not self.is_mounted or not self._page_ready or not self.screen_stack or not self.screen.is_mounted:
+            return
+        if self.page == "game" and self.game:
+            if not self.screen.query("#solve") or not self.screen.query("#board"):
+                return
+            game = self.game
+            self.set_text("#level-name", game.name)
+            self.set_text("#mode-name", MODE_NAMES[game.difficulty] + (" / 自制试玩" if game.custom else ""))
+            self.set_text("#stats", f"LEFT {len(self.session.remaining)}/{len(self.session.board.arrows)}")
+            if game.seconds_left is None:
+                value = "XX:XX"
+            else:
+                seconds = math.ceil(game.seconds_left)
+                value = f"{seconds // 60:02d}:{seconds % 60:02d}"
+            self.set_text("#timer", value)
+            self.set_text("#combo", f"COMBO {game.combo:03d}  /  +{game.combo_bonus_seconds}s" if game.mode == "endless" else "")
+            self.set_text("#status", self.message)
+            self.q("#solve", Button).label = "停止 S" if self.auto_solving else "演示 S"
+            self.q("#board", object).refresh()
+            self.q("#hearts", object).refresh()
+        elif self.page == "result" and self.game:
+            game = self.game
+            reason = "时间耗尽" if game.failure_reason == "timeout" else "生命耗尽"
+            lead = reason if game.outcome == "lost" else "无尽挑战完成" if game.outcome == "endless_won" else "50 关全部完成" if game.outcome == "campaign_won" else "全部箭头已移除"
+            assist = "\n演示局不计成就与通关纪录。" if game.assisted else ""
+            self.set_text("#result-summary", f"{lead}\n第 {game.level_index} 关 / {MODE_NAMES[game.difficulty]}\nLEFT {len(self.session.remaining)}/{len(self.session.board.arrows)}\n用时 {game.elapsed_seconds:.1f} 秒{assist}")
+        elif self.page == "editor":
+            self.set_text("#editor-status", f"{len(self.editor_mask)} 格 · 左绘右擦")
+            self.q("#board", object).refresh()
+        self.set_text("#achievement-toast", self.toast_text)
+        matches = self.screen.query("#achievement-toast")
+        if matches:
+            toast = matches.first()
+            toast.styles.offset = (max(0, self.screen.size.width - 27), 0)
+            toast.set_class(bool(self.toast_text), "show-toast")
+
+    def sound(self, event):
+        if self.native and self.host_action is not None:
+            self.audio.play(event)
+
+    def show_toast(self, title, description=""):
+        self.toast_queue.append((title, description))
+        self.advance_toast()
+
+    def advance_toast(self):
+        now = self.clock()
+        if self.toast_text and now < self.toast_until:
+            return
+        if self.toast_queue:
+            title, description = self.toast_queue.popleft()
+            self.toast_text = f"[#72d69c]{title}[/]\n{description}"
+            self.toast_until = now + 4.0
+        else:
+            self.toast_text = ""
+        if self.is_mounted:
+            self.refresh_labels()
+
+    def awards(self, items):
+        for item in items:
+            self.show_toast("成就达成 / " + item.title, item.description)
+            self.sound("achievement")
+        try:
+            self.store.save_profile()
+        except DomainStorageError as error:
+            # Keep earned progress in memory; the next normal save can persist it.
+            self.show_toast("成绩保存失败", str(error))
+
+    def reset_visuals(self):
+        self.animation = None
+        self.animation_elapsed = 0.0
+        self.heart_elapsed = self.heart_progress = self.lost_index = None
+        self.hovered = self.hint_id = None
+        self.failed_ids.clear()
+        self.auto_solving = False
+        self.autosave_elapsed = 0.0
+        self.cursor = min(self.session.board.mask, key=lambda c: (c[1], c[0])) if self.game else (0, 0)
+
+    def start_game(self, mode):
+        if mode not in self.store.profile.unlocked_modes:
+            self.show_toast("模式尚未解锁")
+            return
+        self.auto_save()
+        seed = self.seed if self.seed is not None else secrets.token_hex(8)
+        self.game = GameRun.new(mode, seed, tutorial=not self.store.profile.tutorial_completed)
+        self.reset_visuals()
+        self.message = self.game.description
+        self.route("game")
+
+    def click_cell(self, cell):
+        if self.page != "game" or not self.game or self.animation or self.game.outcome != "playing":
             return
         self.cursor = cell
         arrow_id = self.session.current_board.occupancy.get(cell)
@@ -149,211 +214,340 @@ class ArrowApp(App):
             self.auto_solving = False
             self.play_arrow(arrow_id)
 
-    def play_arrow(self, arrow_id: str) -> None:
-        result = self.session.click(arrow_id)
+    def play_arrow(self, arrow_id):
+        if not self.game or self.animation or self.game.outcome != "playing":
+            return
+        self.consume_game_time()
+        if self.game.outcome != "playing":
+            self.process_result()
+            return
+        result = self.game.click(arrow_id)
         if result.kind == "ignored":
             return
-        self.hint_id = None
-        self.hovered = None
-        self.animation_started = time.monotonic()
+        self.hovered = self.hint_id = None
         collision = result.kind == "collision"
-        self.animation_duration = 0.95 if collision else 0.65
+        self.animation_duration = .95 if collision else .65
+        self.animation_elapsed = 0.0
         self.animation = Animation(result.arrow, "collision" if collision else "exit", 0.0,
                                    result.collision.distance if collision else None)
         if collision:
             self.lost_index = self.session.lives
-            # The heart breaks when the arrow impacts, not during its approach.
-            self.heart_started = self.animation_started + self.animation_duration * 0.28
+            self.heart_elapsed = -self.animation_duration * .30
             self.heart_progress = 0.0
-            self.message = "[bold #ff5269]撞到了！[/]\n头部射线上仍有箭头。"
+            self.message = "[#d96b9e]发生碰撞。[/]\n先移除头部射线上的遮挡。"
+            self.sound("collision")
         else:
             self.failed_ids.discard(arrow_id)
-            self.message = "路径畅通，飞出棋盘。"
+            self.message = "路径畅通。" if not self.game.assisted else "正在演示；本局不计成就。"
+            if not self.game.assisted:
+                self.awards(self.achievements.record_arrow(True))
+            self.sound("click")
         self.refresh_labels()
 
-    def tick(self) -> None:
-        now = time.monotonic()
-        if self.animation is not None:
-            progress = min(1.0, (now - self.animation_started) / self.animation_duration)
-            self.animation = Animation(self.animation.arrow, self.animation.kind, progress,
-                                       self.animation.collision_distance)
-            if progress >= 1:
+    def consume_game_time(self):
+        now = self.clock()
+        dt = max(0.0, now - self.last_tick)
+        self.last_tick = now
+        if self.page != "game" or not self.game or not self._page_ready:
+            return 0.0
+        self.game.tick(dt)
+        self.autosave_elapsed += dt
+        if self.store.settings.autosave and self.autosave_elapsed >= self.store.settings.save_minutes * 60:
+            self.auto_save()
+        return dt
+
+    def tick(self):
+        if not self.is_mounted or not self.screen_stack:
+            return
+        dt = self.consume_game_time()
+        if self.toast_text or self.toast_queue:
+            self.advance_toast()
+        if self.page != "game" or not self.game or not self._page_ready:
+            return
+        if self.animation:
+            self.animation_elapsed += dt
+            p = min(1.0, self.animation_elapsed / self.animation_duration)
+            self.animation = Animation(self.animation.arrow, self.animation.kind, p, self.animation.collision_distance)
+            if p >= 1.0:
                 if self.animation.kind == "collision":
                     self.failed_ids.add(self.animation.arrow.id)
                 self.animation = None
-                if self.session.status == "won":
-                    mode = "演示完成" if self.assisted else "全部清空！"
-                    self.message = f"[bold #b2efc8]{mode}[/]\n保留 {self.session.lives} 颗生命\n点击下一关继续。"
-                    self.auto_solving = False
-                elif self.session.status == "lost":
-                    self.message = "[bold #ff5269]生命耗尽[/]\n按 R 重来，再试一次。"
-                    self.auto_solving = False
-                self.refresh_labels()
-            self.query_one("#board").refresh()
-        if self.heart_started is not None:
-            self.heart_progress = max(0.0, min(1.0, (now - self.heart_started) / 0.7))
-            self.query_one("#hearts").refresh()
+        if self.heart_elapsed is not None:
+            self.heart_elapsed += dt
+            self.heart_progress = max(0.0, min(1.0, self.heart_elapsed / .7))
             if self.heart_progress >= 1:
-                self.heart_started = None
-                self.heart_progress = None
-                self.lost_index = None
-        if self.auto_solving and self.animation is None and self.session.status == "playing" and not self.editing:
-            solution = solve(self.session.current_board)
-            if not solution.solvable:
-                self.auto_solving = False
-                self.message = "当前局面无解，请重来或调整地图。"
-                self.refresh_labels()
-            else:
-                self.play_arrow(solution.order[0])
-
-    def reset_visuals(self) -> None:
-        self.animation = None
-        self.heart_started = None
-        self.heart_progress = None
-        self.lost_index = None
-        self.auto_solving = False
-        self.assisted = False
-        self.hovered = None
-        self.hint_id = None
-        self.failed_ids.clear()
-        self.cursor = min(self.session.board.mask, key=lambda p: (p[1], p[0]))
-
-    def load_level(self, index: int) -> None:
-        self.level_index = index
-        self.level = make_level(index, seed=self.seed)
-        self.session = GameSession(self.level.board)
-        self.reset_visuals()
-        self.message = self.level.description
-        self.refresh_labels()
-
-    def action_restart(self) -> None:
-        if self.editing:
+                self.heart_elapsed = self.heart_progress = self.lost_index = None
+        if not self.animation and self.game.outcome != "playing":
+            self.process_result()
             return
-        self.session.restart()
-        self.reset_visuals()
-        self.message = "重新开始。先找朝外且路径畅通的箭头。"
+        if self.auto_solving and not self.animation and self.game.outcome == "playing":
+            solution = solve(self.session.current_board)
+            if solution.order:
+                self.play_arrow(solution.order[0])
         self.refresh_labels()
 
-    def action_hint(self) -> None:
-        if self.editing or self.animation or self.session.status != "playing":
+    def process_result(self):
+        game = self.game
+        self.auto_solving = False
+        if not game.counted:
+            if not game.assisted:
+                if game.outcome == "lost" and not game.custom:
+                    self.awards(self.achievements.record_loss())
+                elif game.outcome == "endless_won":
+                    self.awards(self.achievements.record_endless(game.elapsed_seconds))
+                elif game.outcome != "lost":
+                    self.awards(self.achievements.record_level(game))
+            game.counted = True
+            self.sound("lose" if game.outcome == "lost" else "win")
+        self.auto_save()
+        if game.mode == "endless" and game.outcome == "level_won":
+            game.advance()
+            self.reset_visuals()
+            self.message = game.description
+            self.last_tick = self.clock()
+            self.route("game")
+        else:
+            self.route("result")
+
+    def auto_save(self):
+        self.autosave_elapsed = 0.0
+        if not self.game or not self.store.settings.autosave:
+            return False
+        try:
+            self.store.save_slot(0, self.game)
+            return True
+        except DomainStorageError as error:
+            self.show_toast("自动保存失败", str(error))
+            return False
+
+    def action_menu(self):
+        if self.page == "menu":
+            self.route(self.paused_page)
+        else:
+            self.paused_page = self.page
+            self.route("menu")
+
+    def action_quit(self):
+        self.request_desktop_exit()
+
+    def request_desktop_exit(self):
+        self.consume_game_time()
+        self.auto_save()
+        self.audio.close()
+        self.exit()
+
+    def action_hint(self):
+        if self.page != "game" or self.animation or self.game.outcome != "playing":
             return
         solution = solve(self.session.current_board)
         self.hint_id = solution.order[0] if solution.order else None
-        self.message = "[bold #b2efc8]浅绿色箭头可以飞出。[/]\n沿它头部的方向看向边界。"
+        self.message = "绿色箭头可以移除。\n沿头部方向观察遮挡。"
         self.refresh_labels()
 
-    def action_solve(self) -> None:
-        if self.editing or self.session.status != "playing":
+    def action_solve(self):
+        if self.page != "game" or self.game.outcome != "playing":
             return
         self.auto_solving = not self.auto_solving
-        self.assisted = self.assisted or self.auto_solving
-        self.message = "按通关顺序逐支演示，再按 S 停止。" if self.auto_solving else "已停止演示，可以继续手动点击。"
+        if self.auto_solving:
+            self.game.assisted = True
+        self.message = "演示不计成就与纪录；再次按 S 停止。" if self.auto_solving else "演示已停止。"
         self.refresh_labels()
 
-    def action_next_level(self) -> None:
-        if not self.editing and self.session.status == "won" and self.animation is None:
-            self.load_level(self.level_index + 1)
-
-    def action_editor(self) -> None:
-        if self.editing:
+    def action_restart(self):
+        if self.page not in ("game", "result") or not self.game:
             return
-        if self.animation is not None:
-            return
-        self.auto_solving = False
-        self.editing = True
-        self.query_one("#game-panel").add_class("hidden")
-        self.query_one("#editor-panel").remove_class("hidden")
-        self.query_one("#footer", Static).update("地图工坊 / 模板、画布和种子组合     ESC 返回游戏")
-        self.refresh_labels()
+        if not self.game.custom and self.game.outcome == "playing" and not self.game.assisted:
+            self.awards(self.achievements.record_loss())
+        self.game.restart()
+        self.reset_visuals()
+        self.message = "重新开始。"
+        self.route("game")
 
-    def action_back(self) -> None:
-        if self.editing:
-            self.editing = False
-            self.painting = 0
-            self.query_one("#editor-panel").add_class("hidden")
-            self.query_one("#game-panel").remove_class("hidden")
-            self.query_one("#footer", Static).update("H 提示   S 演示   R 重来     方向键 + Enter 选箭头")
-            self.refresh_labels()
+    def apply_settings(self):
+        from dataclasses import replace
+        cfg = replace(self.store.settings)
+        if self.settings_section == "basic":
+            cfg.autosave = self.q("#cfg-autosave", Switch).value
+            cfg.save_minutes = int(self.q("#cfg-save-minutes", Input).value)
+        elif self.settings_section == "audio":
+            cfg.muted = self.q("#cfg-muted", Switch).value
+            cfg.master_volume = int(self.q("#cfg-master", Input).value) / 100
+            cfg.effects_volume = int(self.q("#cfg-effects", Input).value) / 100
+        elif self.settings_section == "video":
+            cfg.resolution = str(self.q("#cfg-resolution", Select).value)
+            cfg.reduced_motion = self.q("#cfg-motion", Switch).value
+        cfg.validate()
+        old_resolution = self.store.settings.resolution
+        self.store.settings = cfg
+        self.store.save_settings()
+        self.audio.configure(cfg.master_volume, cfg.effects_volume, cfg.muted)
+        self.autosave_elapsed = 0.0
+        self.resolution_name = cfg.resolution
+        if self.host_action and old_resolution != cfg.resolution:
+            self.host_action("resolution:" + cfg.resolution)
+        self.set_text("#settings-status", "设置已保存。")
+
+    def load_editor(self, selection):
+        self.editor_selection = selection
+        kind, identifier = selection.split(":", 1)
+        if kind == "preset":
+            item = next(p for p in self.presets if p.id == identifier)
+            self.editor_name = item.name + " / 我的版本"
         else:
-            self.auto_solving = False
-            self.refresh_labels()
+            item = next(p for p in self.store.list_custom_maps() if p.id == identifier)
+            self.editor_name = item.name
+            self.editor_seed = item.config.seed
+            self.editor_density = round(item.config.density * 100)
+            self.editor_length = item.config.max_length
+            self.editor_turns = round(item.config.turn_bias * 100)
+        self.editor_mask = set(item.mask)
+        self.editor_difficulty = item.difficulty
 
-    def action_resolution(self) -> None:
-        if self.host_action:
-            presets = ["1024x768", "1280x720", "1920x1080"]
-            self.resolution_name = presets[(presets.index(self.resolution_name) + 1) % 3]
-            self.host_action("resolution:" + self.resolution_name)
-            self.refresh_labels()
+    def capture_editor(self):
+        if not self.is_mounted or not self.screen.query("#map-name"):
+            return
+        self.editor_name = self.q("#map-name", Input).value
+        self.editor_seed = self.q("#editor-seed", Input).value
+        self.editor_difficulty = str(self.q("#map-difficulty", Select).value)
+        self.editor_path = self.q("#map-path", Input).value
+        for field, selector in (("editor_density","#density"),("editor_length","#length"),("editor_turns","#turns")):
+            text = self.q(selector, Input).value
+            if text.isdigit():
+                setattr(self, field, int(text))
 
-    def paint_cell(self, cell, *, erase: bool = False) -> None:
+    def editor_config(self):
+        self.capture_editor()
+        return GenerateConfig(self.editor_seed, int(self.q("#density", Input).value) / 100,
+                              int(self.q("#length", Input).value), int(self.q("#turns", Input).value) / 100)
+
+    def paint_cell(self, cell, *, erase=False):
         if cell is None:
             return
-        if erase:
-            self.editor_mask.discard(cell)
-        else:
-            self.editor_mask.add(cell)
+        before = cell in self.editor_mask
+        self.editor_mask.discard(cell) if erase else self.editor_mask.add(cell)
+        if before != (cell in self.editor_mask):
+            self.record_map_edit()
         self.refresh_labels()
 
-    @on(Select.Changed, "#template")
-    def choose_template(self, event: Select.Changed) -> None:
-        if event.value is not Select.BLANK:
-            self.editor_mask = set(template_mask(str(event.value), 9, 8))
-            self.refresh_labels()
+    def record_map_edit(self):
+        if "map_editor" not in self.store.profile.achievements:
+            self.awards(self.achievements.record_editor())
 
-    def editor_config(self) -> GenerateConfig:
-        return GenerateConfig(
-            seed=self.query_one("#seed", Input).value,
-            density=int(self.query_one("#density", Input).value) / 100,
-            max_length=int(self.query_one("#length", Input).value),
-            turn_bias=int(self.query_one("#turns", Input).value) / 100,
-        )
-
-    def editor_action(self, action: str) -> None:
-        try:
-            path = Path(self.query_one("#map-path", Input).value).expanduser()
-            if action == "generate":
-                config = self.editor_config()
-                self.level = generate(frozenset(self.editor_mask), config)
-                self.session = GameSession(self.level.board)
-                self.seed = config.seed
-                self.reset_visuals()
-                self.message = "[bold #b2efc8]有解验证通过[/]\n种子：" + self.seed.replace("[", "\\[")
-                self.action_back()
-            elif action == "save":
-                save_map(path, frozenset(self.editor_mask), self.editor_config())
-                self.query_one("#editor-status", Static).update("已保存：" + path.name)
-            elif action == "load":
-                mask, config = load_map(path)
-                if any(x >= 12 or y >= 10 for x, y in mask):
-                    raise ValueError("画布最大为 12 × 10 格")
-                self.editor_mask = set(mask)
-                for key, value in [("seed", config.seed), ("density", round(config.density * 100)),
-                                   ("length", config.max_length), ("turns", round(config.turn_bias * 100))]:
-                    self.query_one(f"#{key}", Input).value = str(value)
-                self.refresh_labels()
-                self.query_one("#editor-status", Static).update("地图与种子参数已载入")
-            elif action == "clear":
+    def editor_action(self, key):
+        self.capture_editor()
+        identifier = self.editor_selection.split(":", 1)[1] if self.editor_selection.startswith("custom:") else None
+        if key == "editor-clear":
+            if self.editor_mask:
                 self.editor_mask.clear()
-                self.refresh_labels()
-        except (ValueError, OSError, TypeError, KeyError) as error:
-            self.query_one("#editor-status", Static).update("[red]" + str(error).replace("[", "\\[") + "[/]")
+                self.record_map_edit()
+        elif key == "editor-delete":
+            if identifier is None:
+                raise ValueError("预设地图不能删除。")
+            self.store.delete_custom_map(identifier)
+            self.load_editor("preset:" + self.presets[0].id)
+            self.page = "home"  # Do not recapture the deleted editor fields.
+            self.route("editor")
+            return
+        elif key == "editor-import":
+            item = self.store.import_custom_map(Path(self.editor_path).expanduser())
+            self.load_editor("custom:" + item.id)
+            self.page = "home"
+            self.route("editor")
+            return
+        elif key in ("editor-save", "editor-export"):
+            item = self.store.save_custom_map(self.editor_name, frozenset(self.editor_mask),
+                                              self.editor_config(), self.editor_difficulty, map_id=identifier)
+            self.editor_selection = "custom:" + item.id
+            self.awards(self.achievements.record_editor())
+            if key == "editor-export":
+                self.store.export_custom_map(item.id, Path(self.editor_path).expanduser())
+            self.page = "home"
+            self.route("editor")
+            self.show_toast("地图已导出" if key == "editor-export" else "地图已保存", item.name)
+            return
+        elif key == "editor-play":
+            self.auto_save()
+            self.game = GameRun.from_custom(frozenset(self.editor_mask), self.editor_config(), self.editor_difficulty)
+            self.game.name = self.editor_name
+            self.reset_visuals()
+            self.message = self.game.description
+            self.route("game")
+            return
+        self.refresh_labels()
 
-    @on(Button.Pressed)
-    def button_pressed(self, event: Button.Pressed) -> None:
-        key = event.button.id
-        if key and key.startswith("level-"):
-            self.load_level(int(key[-1]))
-        elif key in ("hint", "solve", "restart", "resolution"):
-            getattr(self, f"action_{key}")()
-        elif key == "next":
-            self.action_next_level()
-        elif key == "custom":
-            self.action_editor()
-        elif key == "back":
-            self.action_back()
-        elif key in ("generate", "save", "load", "clear"):
-            self.editor_action(key)
-        elif key == "close":
-            self.exit()
-        elif key == "minimize" and self.host_action:
-            self.host_action("minimize")
+    @on(Select.Changed, "#map-catalog")
+    def select_map(self, event):
+        if self.page == "editor" and isinstance(event.value, str) and event.value != self.editor_selection:
+            self.load_editor(event.value)
+            self.page = "home"
+            self.route("editor")
+
+    def dispatch(self, key):
+        try:
+            if key == "new-game":
+                self.route("difficulty")
+            elif key.startswith("start-"):
+                self.start_game(key[6:])
+            elif key == "go-home":
+                self.consume_game_time()
+                self.auto_save()
+                self.auto_solving = False
+                self.route("home")
+            elif key == "resume":
+                self.route(self.paused_page)
+            elif key == "pause":
+                self.action_menu()
+            elif key == "back":
+                self.route(self.back_page)
+            elif key.startswith("open-"):
+                target = {"open-saves":"saves", "open-settings":"settings",
+                          "open-achievements":"achievements", "open-editor":"editor"}[key]
+                self.back_page = self.page
+                self.route(target)
+            elif key.startswith("settings-"):
+                self.settings_section = key[9:]
+                self.route("settings")
+            elif key in ("apply-settings", "audio-preview"):
+                self.apply_settings()
+                if key == "audio-preview":
+                    self.sound("click")
+            elif key.startswith("load-slot-"):
+                loaded = self.store.load_slot(int(key.rsplit("-", 1)[1]))
+                if loaded is not None:
+                    # Read first: saving the outgoing game may overwrite slot 0.
+                    self.auto_save()
+                    self.game = loaded
+                    self.reset_visuals()
+                    self.message = "已恢复保存的局面。"
+                    if loaded.outcome == "playing":
+                        self.route("game")
+                    else:
+                        self.process_result()
+            elif key.startswith("save-slot-"):
+                self.store.save_slot(int(key.rsplit("-", 1)[1]), self.game)
+                self.route("saves")
+                self.show_toast("手动存档已保存")
+            elif key.startswith("delete-slot-"):
+                self.store.delete_slot(int(key.rsplit("-", 1)[1]))
+                self.route("saves")
+            elif key == "next-level" and self.game:
+                if self.game.advance():
+                    self.reset_visuals()
+                    self.message = self.game.description
+                    self.route("game")
+            elif key in ("hint", "solve", "restart"):
+                getattr(self, "action_" + key)()
+            elif key.startswith("editor-"):
+                self.editor_action(key)
+            elif key == "exit-desktop":
+                self.request_desktop_exit()
+            elif key in ("minimize", "github"):
+                if self.host_action:
+                    self.host_action("minimize" if key == "minimize" else "open_url")
+                elif key == "github":
+                    import webbrowser
+                    webbrowser.open("https://github.com/155TuT/arrow-Y2K")
+        except (DomainStorageError, ValueError, OSError) as error:
+            text = str(error).replace("[", "\\[")
+            self.show_toast("操作未完成", text)
+            self.set_text("#editor-status" if self.editing else "#settings-status", text)

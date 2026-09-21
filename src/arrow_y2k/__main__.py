@@ -1,25 +1,54 @@
-"""Run the native Textual pixel window, or opt into a normal terminal."""
+"""Source and frozen executables share the same launch and verification entrypoint."""
 import argparse
 import asyncio
+import sys
+from pathlib import Path
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="一箭又一箭 / Textual 像素解谜")
-    parser.add_argument("--terminal", action="store_true", help="使用当前终端（显示精度由终端控制）")
-    parser.add_argument("--resolution", choices=("1024x768", "1280x720", "1920x1080"), default="1280x720")
-    parser.add_argument("--level", type=int, default=1)
-    parser.add_argument("--seed", default="2026")
-    parser.add_argument("--screenshot", help="保存真实窗口帧 PNG")
-    parser.add_argument("--quit-after", type=float, help="验证时在指定秒数后关闭")
+def prepare_windowed_streams(data_dir: Path | None = None):
+    """Supply missing GUI-process streams without replacing an existing console.
+
+    Textual retains sys.__stdout__/sys.__stderr__, so all four names matter.
+    The returned file stays open as the process's stream and is closed at exit.
+    """
+    missing = [name for name in ("stdout", "stderr", "__stdout__", "__stderr__")
+               if getattr(sys, name) is None]
+    if not missing:
+        return None
+    from .storage import user_data_root
+    root = Path(data_dir) if data_dir is not None else user_data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    stream = (root / "runtime.log").open("a", encoding="utf-8", buffering=1)
+    for name in missing:
+        setattr(sys, name, stream)
+    return stream
+
+
+def main():
+    parser = argparse.ArgumentParser(description="ARROW.AFTER.ARROW-Y2K")
+    parser.add_argument("--terminal", action="store_true")
+    parser.add_argument("--resolution", choices=("1024x768", "1280x720", "1920x1080"))
+    parser.add_argument("--seed", help="固定新游戏种子；默认每次新建使用新种子")
+    parser.add_argument("--data-dir", type=Path, help="独立用户数据目录（测试或便携使用）")
+    parser.add_argument("--screenshot", help="保存原生窗口显示帧")
+    parser.add_argument("--quit-after", type=float, help="验证用自动退出秒数")
+    parser.add_argument("--self-test", action="store_true", help="执行源码与二进制共用的行为验证套件")
+    parser.add_argument("--test-report", help="写出验证 JSON 报告")
     args = parser.parse_args()
+    if args.self_test:
+        from .selftest import run_self_tests
+        raise SystemExit(run_self_tests(args.test_report))
+    prepare_windowed_streams(args.data_dir)
     from .app import ArrowApp
-    app = ArrowApp(native=not args.terminal, level=args.level, seed=args.seed)
-    app.resolution_name = args.resolution
+    app = ArrowApp(native=not args.terminal, seed=args.seed, data_dir=args.data_dir)
+    if args.resolution:
+        app.resolution_name = args.resolution
+        app.store.settings.resolution = args.resolution
     if args.terminal:
         app.run()
     else:
         from .desktop import run_desktop
-        asyncio.run(run_desktop(app, resolution=args.resolution,
+        asyncio.run(run_desktop(app, resolution=app.resolution_name,
                                 screenshot_path=args.screenshot, quit_after=args.quit_after))
 
 

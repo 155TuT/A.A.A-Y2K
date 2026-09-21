@@ -4,19 +4,30 @@
 
 | 模块 | 唯一负责的功能 |
 | --- | --- |
-| `model.py` | 坐标、箭头、占用、射线碰撞与一局游戏状态 |
+| `model.py` | 坐标、箭头、占用、射线碰撞与单张棋盘状态 |
 | `solver.py` | 消除顺序求解、证书复放验证 |
-| `generation.py` | 模板、种子生成、固定引导路径 |
-| `persistence.py` | 地图与生成参数的 JSON 交换 |
+| `generation.py` | 种子箭头路径构造与通用形状函数 |
+| `catalog.py` | 简单、中等、困难预设目录 |
+| `canvas.py` | 编辑、导入、试玩与读档共用的画布范围约束 |
+| `campaign.py` | 模式、关号、计时、连击、结果与精确局面快照 |
+| `storage.py` | 设置、玩家记录、五槽存档、自制地图的持久化与交换 |
+| `persistence.py` | 旧地图 API 的兼容导出，直接复用 storage 的编解码 |
+| `achievements.py` | 解锁条件、累计统计和成绩去重；由应用保存结果 |
+| `audio.py` | 合成音效、音量与设备生命周期 |
 | `pixels.py` | 像素画、蛇形路径动画、心碎动画、像素命中坐标 |
-| `widgets.py` | Textual 棋盘/红心控件及鼠标到格子的适配 |
-| `app.py` | Textual 页面组合、60 Hz 时钟、交互动作、局间切换 |
+| `widgets.py` | Textual 栅格控件和鼠标/键盘到格子的适配 |
+| `pages.py` | 各页面组件的组合和布局 |
+| `app.py` | 组合服务、路由、60 Hz 时钟、保存调度及动画协调 |
 | `fonts.py` | 官方字体加载、二值字形栅格、字符宽度规则 |
-| `desktop.py` | 无边框窗口、分辨率、操作系统事件转发、Textual 合成帧呈现 |
+| `desktop.py` | 无边框窗口、分辨率、系统事件转发与 Textual 帧呈现 |
+| `__main__.py` | 源码和打包程序共用入口，无控制台进程的日志流适配 |
+| `selftest.py` | 源码和冻结程序共用的行为验证套件 |
 
-只有框架适配层继承 `App` / `Widget`；游戏模型由数据类和组合构成。`GameSession` 持有不可变初始棋盘与可变剩余箭头表，`ArrowApp` 组合 Session 和动画状态，`PixelHost` 接收一个 Textual App。没有第二套按钮判定、规则、求解器或生成器。
+组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
 
-按 demo 的「少继承、低鲁棒性」方向，使用直接的调用链和严格的输入约束，不添加插件注册器、多层仓储、通用事件总线或静默恢复分支。仍保留必要的地图输入检查与边界错误反馈；核心不捕获所有异常。
+游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。
+
+采用直接调用与显式数据，不添加插件注册器、通用事件总线或多层仓储。外部 JSON 和生成参数在入口检查；不以捕获所有异常来隐藏实现错误。记录文件采用原子替换，以保护已有进度。
 
 ## 碰撞与动画
 
@@ -51,7 +62,7 @@
 from arrow_y2k.app import ArrowApp
 from arrow_y2k.desktop import run_desktop
 
-app = ArrowApp(native=True, level=1, seed="my-seed")
+app = ArrowApp(native=True, seed="my-seed", data_dir="my-player-data")
 await run_desktop(app, resolution="1280x720")
 ```
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING
 from PIL import Image, ImageDraw
 from rich.cells import cell_len
 from textual import events
+from textual.geometry import Region
 
 from .fonts import CELL_HEIGHT, CELL_WIDTH, draw_text
 
@@ -49,6 +51,7 @@ RESOLUTIONS = {
 }
 BACKGROUND = (11, 14, 22)
 FOREGROUND = (240, 243, 248)
+PROJECT_URL = "https://github.com/155TuT/arrow-Y2K"
 
 
 def configure_native_colors(app: App) -> None:
@@ -104,26 +107,29 @@ def _textual_surface(app: App):
         overlays = []
         for widget, (_, clip) in reversed(visible):
             renderer = getattr(widget, "native_frame", None)
-            if renderer is None or not widget.visible:
+            complete_overlay = getattr(widget, "native_complete_overlay", False)
+            if (renderer is None and not complete_overlay) or not widget.visible:
                 continue
-            region = widget.content_region
+            region = widget.region if complete_overlay else widget.content_region
             width, height = region.width * CELL_WIDTH, region.height * CELL_HEIGHT
             if not width or not height:
                 continue
-            overlays.append((region, clip, renderer(width, height)))
+            if complete_overlay:
+                # Textual's global strips may split a wide CJK glyph at an
+                # underlying widget boundary. Its own full render_lines keep
+                # the glyph intact and preserve Textual's styles and borders.
+                lines = widget.render_lines(Region(0, 0, region.width, region.height))
+                art = _rasterize_strips(lines, (width, height))
+            else:
+                art = renderer(width, height)
+            overlays.append((region, clip, art))
     return strips, overlays
 
 
-def compose_frame(app: App, logical_size: tuple[int, int]) -> Image.Image:
-    """Compose a native-resolution frame usable by any embedding host.
-
-The real Textual compositor supplies every ordinary widget. Widgets may expose
-``native_frame(width, height) -> PIL.Image`` for pixel art inside their content
-region. Only visible widgets are overlaid, clipped to their Textual viewport.
-"""
-    frame = Image.new("RGB", logical_size, BACKGROUND)
+def _rasterize_strips(strips, size: tuple[int, int]) -> Image.Image:
+    """One shared path for Textual colours, glyphs, backgrounds and underline."""
+    frame = Image.new("RGB", size, BACKGROUND)
     draw = ImageDraw.Draw(frame)
-    strips, overlays = _textual_surface(app)
     for row, strip in enumerate(strips):
         y = row * CELL_HEIGHT
         x = 0
@@ -142,6 +148,19 @@ region. Only visible widgets are overlaid, clipped to their Textual viewport.
                 if style and style.underline:
                     draw.line((x, y + CELL_HEIGHT - 1, x + width - 1, y + CELL_HEIGHT - 1), fill=foreground)
             x += width
+
+    return frame
+
+
+def compose_frame(app: App, logical_size: tuple[int, int]) -> Image.Image:
+    """Compose a native-resolution frame usable by any embedding host.
+
+The real Textual compositor supplies every ordinary widget. Widgets may expose
+``native_frame(width, height) -> PIL.Image`` for pixel art inside their content
+region. Only visible widgets are overlaid, clipped to their Textual viewport.
+"""
+    strips, overlays = _textual_surface(app)
+    frame = _rasterize_strips(strips, logical_size)
 
     # Compositor visible_widgets is front-to-back; overlay in painter order.
     for region, clip, art in overlays:
@@ -171,11 +190,26 @@ class PixelHost:
         self._display = None
         self._window = None
         self._drag = None
+        self._exit_requested = False
+
+    def _request_exit(self) -> None:
+        """All user exits cross the app boundary so its active game is saved."""
+        if self._exit_requested:
+            return
+        self._exit_requested = True
+        callback = getattr(self.app, "request_desktop_exit", None)
+        if callback is not None:
+            callback()
+        else:
+            self.app.exit()
+        self.running = False
 
     def handle_action(self, action: str) -> None:
         """Small host capability boundary called by ordinary Textual buttons."""
         if action == "close":
-            self.running = False
+            self._request_exit()
+        elif action == "open_url":
+            webbrowser.open(PROJECT_URL, new=2)
         elif action == "minimize":
             self._pygame.display.iconify()
         elif action.startswith("resolution:"):
@@ -231,8 +265,11 @@ class PixelHost:
         """Forward an SDL event; this method can be exercised without OS input."""
         pg = self._pygame
         if event.type == pg.QUIT:
-            self.running = False
+            self._request_exit()
         elif event.type == pg.KEYDOWN:
+            if event.key == pg.K_F4 and event.mod & pg.KMOD_ALT:
+                self._request_exit()
+                return
             if event.key == pg.K_v and event.mod & pg.KMOD_CTRL:
                 text = pg.scrap.get_text()
                 if text:
@@ -250,7 +287,9 @@ class PixelHost:
             self.app.post_message(events.AppFocus())
         elif event.type in (pg.MOUSEBUTTONDOWN, pg.MOUSEBUTTONUP, pg.MOUSEMOTION):
             point = tuple(coordinate // self.resolution.scale for coordinate in event.pos)
-            if event.type == pg.MOUSEBUTTONDOWN and event.button == 1 and point[0] < 150 and point[1] < 24:
+            if (event.type == pg.MOUSEBUTTONDOWN and event.button == 1
+                    and getattr(self.app, "allow_window_drag", False)
+                    and point[0] < 150 and point[1] < 24):
                 self._drag = event.pos
                 return
             if self._drag is not None:
@@ -295,6 +334,7 @@ class PixelHost:
         pygame.key.start_text_input()
         self.app.host_action = self.handle_action
         self.running = True
+        self._exit_requested = False
         ready = asyncio.Event()
 
         async def on_ready(pilot):
@@ -312,6 +352,11 @@ class PixelHost:
                 for event in pygame.event.get():
                     self.process_event(event)
                 await asyncio.sleep(0)
+                # ExitApp may empty the screen stack during this yield. The
+                # immediate _exit flag is part of the pinned Textual adapter.
+                if (not self.running or task.done() or not self.app.screen_stack
+                        or self.app._exit):
+                    break
                 focused = self.app.focused
                 if focused is not None:
                     r = focused.content_region
@@ -324,7 +369,7 @@ class PixelHost:
                 self._display.blit(surface, (0, 0))
                 pygame.display.flip()
                 if quit_after is not None and monotonic() - start >= quit_after:
-                    self.running = False
+                    self._request_exit()
                 await asyncio.sleep(max(0, 1 / 60 - (monotonic() - frame_start)))
             if screenshot_path is not None and last_frame is not None:
                 path = Path(screenshot_path)
@@ -332,7 +377,7 @@ class PixelHost:
                 last_frame.save(path)
         finally:
             if not task.done():
-                self.app.exit()
+                self._request_exit()
             await task
             pygame.key.stop_text_input()
             pygame.display.quit()
