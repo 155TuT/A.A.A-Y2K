@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arrow-y2k"
+version = "0.1.0"
+description = "一箭又一箭 — a Textual pixel puzzle"
+requires-python = ">=3.11"
+dependencies = ["textual==6.12.0", "pygame-ce==2.5.8", "Pillow==12.3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+arrow-y2k = "arrow_y2k.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+arrow_y2k = ["*.tcss", "assets/fonts/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
