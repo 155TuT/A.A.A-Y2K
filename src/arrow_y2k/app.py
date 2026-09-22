@@ -258,7 +258,9 @@ class ArrowApp(App):
             self.lost_index = self.session.lives
             self.heart_elapsed = -self.animation_duration * .30
             self.heart_progress = 0.0
-            self.message = "[#d96b9e]发生碰撞。[/]\n先移除头部射线上的遮挡。"
+            penalty = self.game.collision_penalty_seconds
+            feedback = f"扣除 {penalty} 秒。" if penalty else "先移除头部射线上的遮挡。"
+            self.message = "[#d96b9e]发生碰撞。[/]\n" + feedback
             self.sound("collision")
         else:
             self.failed_ids.discard(arrow_id)

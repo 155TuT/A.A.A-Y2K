@@ -37,11 +37,12 @@ def test_catalog_connected_and_sized():
                     frontier.append(cell)
         assert not remaining
 
-@pytest.mark.parametrize("mode,seconds", [("easy",None),("medium",600),("hard",480),("endless",30)])
+@pytest.mark.parametrize("mode,seconds", [("easy",None),("medium",240),("hard",120),("endless",30)])
 def test_new_modes_start_at_one_and_snapshot_roundtrip(mode,seconds):
     for seed in range(8):
         run = GameRun.new(mode,str(seed))
         assert (run.level_index,run.difficulty,run.seconds_left) == (1,mode,seconds)
+        assert run.session.lives == (1 if mode == "endless" else 3)
         assert GameRun.from_dict(run.to_dict()).to_dict() == run.to_dict()
         assert validate_certificate(run.session.board,solve(run.session.board).order)
 
@@ -54,7 +55,7 @@ def test_full_fifty_level_progression(mode):
                     "medium" if mode == "medium" or index >= 4 else "easy")
         assert run.level_index == index and run.difficulty == expected
         assert difficulty_for_level(index,mode) == expected
-        assert run.seconds_left == {"easy":None,"medium":600,"hard":480}[expected]
+        assert run.seconds_left == {"easy":None,"medium":240,"hard":120}[expected]
         assert run.elapsed_seconds == 0 and not run.counted
         run.tick(.25)
         clear(run)
@@ -78,16 +79,16 @@ def test_tutorial_seed_randomness_and_shapes():
 def test_timeout_restart_and_invalid_ticks():
     run = GameRun.new("medium","timer")
     initial = run.session.board
-    run.tick(599.75)
+    run.tick(239.75)
     assert run.seconds_left == .25
     run.tick(50)
-    assert (run.seconds_left,run.elapsed_seconds,run.outcome,run.failure_reason) == (0,600,"lost","timeout")
+    assert (run.seconds_left,run.elapsed_seconds,run.outcome,run.failure_reason) == (0,240,"lost","timeout")
     assert run.session.lives == 3 and run.session.status == "lost"
     assert run.click(next(iter(run.session.remaining))).kind == "ignored"
     assert GameRun.from_dict(run.to_dict()).to_dict() == run.to_dict()
     run.restart()
     assert run.session.current_board == initial
-    assert (run.seconds_left,run.elapsed_seconds,run.combo,run.best_combo) == (600,0,0,0)
+    assert (run.seconds_left,run.elapsed_seconds,run.combo,run.best_combo) == (240,0,0,0)
     assert run.outcome == "playing" and not run.failure_reason
     for value in (-1,math.inf,math.nan,"1"):
         with pytest.raises(ValueError): run.tick(value)
@@ -108,6 +109,7 @@ def test_endless_bonus_collision_and_life_loss():
         Arrow("blocked",((0,0),),Direction.RIGHT),Arrow("free",((1,0),),Direction.UP))))
     for life in (2,1,0):
         assert run.click("blocked").kind == "collision"
+        expected -= 20
         assert run.combo == 0 and run.session.lives == life and run.seconds_left == expected
     assert (run.outcome,run.failure_reason) == ("lost","lives")
 
@@ -133,22 +135,23 @@ def test_endless_win_midboard_and_exact_time_boundary(condition):
     assert run.click(order[2]).kind == "ignored" and run.to_dict() == saved
     assert GameRun.from_dict(saved).to_dict() == saved
 
-def test_endless_carries_clock_combo_elapsed_and_restores_lives():
+@pytest.mark.parametrize("lives,next_lives", [(1,2),(2,3),(3,3)])
+def test_endless_carries_clock_combo_elapsed_and_adds_one_life(lives, next_lives):
     run = GameRun.new("endless","carry")
     run.session = GameSession(many_arrows(2))
     run.tick(4.25)
-    run.session.lives = 2
+    run.session.lives = lives
     clear(run)
     before = (run.seconds_left,run.combo,run.best_combo,run.elapsed_seconds,run.run_id)
     assert run.outcome == "level_won" and run.advance()
-    assert run.level_index == 2 and run.session.lives == 3
+    assert run.level_index == 2 and run.session.lives == next_lives
     assert (run.seconds_left,run.combo,run.best_combo,run.elapsed_seconds,run.run_id) == before
     run.restart()
-    assert (run.seconds_left,run.combo,run.best_combo,run.elapsed_seconds) == (30,0,0,0)
+    assert (run.seconds_left,run.combo,run.best_combo,run.elapsed_seconds,run.session.lives) == (30,0,0,0,1)
 
 def test_custom_maps_never_advance_campaign():
     run = GameRun.from_custom(frozenset({(0,0),(2,0),(2,2)}),GenerateConfig("custom",1,3,.8),"hard")
-    assert run.custom and run.seconds_left == 480
+    assert run.custom and run.seconds_left == 120
     assert GameRun.from_dict(run.to_dict()).to_dict() == run.to_dict()
     clear(run)
     assert run.outcome == "level_won" and not run.advance()
@@ -182,3 +185,65 @@ def test_invalid_snapshots_fail_with_value_error(mutation):
     data = deepcopy(GameRun.new("medium","validation").to_dict())
     mutation(data)
     with pytest.raises(ValueError): GameRun.from_dict(data)
+
+
+def collision_run(mode, *, lives=3, seconds=None):
+    board = Board(frozenset({(0,0),(1,0)}), (
+        Arrow("blocked", ((0,0),), Direction.RIGHT),
+        Arrow("free", ((1,0),), Direction.UP),
+    ))
+    run = GameRun.new(mode, "collision-penalty")
+    run.session = GameSession(board)
+    run.session.lives = lives
+    if seconds is not None:
+        run.seconds_left = seconds
+    run.combo = run.best_combo = 9
+    return run
+
+
+@pytest.mark.parametrize("mode,penalty", [("easy",0),("medium",10),("hard",20),("endless",20)])
+def test_collision_penalty_counts_time_once_and_preserves_wall_time(mode, penalty):
+    run = collision_run(mode)
+    run.tick(2.25)
+    before = run.seconds_left
+    assert run.collision_penalty_seconds == penalty
+    result = run.click("blocked")
+    assert result.kind == "collision" and result.lives == run.session.lives == 2
+    assert run.seconds_left == (None if before is None else before - penalty)
+    assert run.elapsed_seconds == 2.25
+    assert run.combo == 0 and run.best_combo == 9 and run.outcome == "playing"
+    after = run.seconds_left
+    assert run.click("missing").kind == "ignored" and run.seconds_left == after
+    assert GameRun.from_dict(run.to_dict()).to_dict() == run.to_dict()
+
+
+@pytest.mark.parametrize("mode,penalty", [("medium",10),("hard",20),("endless",20)])
+@pytest.mark.parametrize("fraction", [0.5, 1.0])
+@pytest.mark.parametrize("lives,reason", [(1,"lives"),(2,"timeout")])
+def test_collision_clamps_clock_and_life_loss_precedes_timeout(mode, penalty, fraction, lives, reason):
+    run = collision_run(mode, lives=lives, seconds=penalty * fraction)
+    assert run.click("blocked").kind == "collision"
+    assert (run.seconds_left, run.session.lives, run.session.status, run.outcome, run.failure_reason) == (
+        0, lives - 1, "lost", "lost", reason)
+    snapshot = run.to_dict()
+    assert GameRun.from_dict(snapshot).to_dict() == snapshot
+    assert run.click("free").kind == "ignored"
+    run.tick(50)
+    assert run.to_dict() == snapshot
+
+
+@pytest.mark.parametrize("mode,seconds,lives,restart_seconds,restart_lives", [
+    ("medium", 597.25, 2, 240, 3),
+    ("hard", 473.5, 1, 120, 3),
+    ("endless", 111.125, 3, 30, 1),
+])
+def test_legacy_snapshot_preserves_exact_clock_and_lives_until_restart(
+    mode, seconds, lives, restart_seconds, restart_lives,
+):
+    old = GameRun.new(mode, "legacy-run").to_dict()
+    old["run"]["seconds_left"] = seconds
+    old["lives"] = lives
+    restored = GameRun.from_dict(old)
+    assert restored.to_dict() == old
+    restored.restart()
+    assert (restored.seconds_left, restored.session.lives) == (restart_seconds, restart_lives)

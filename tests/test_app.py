@@ -32,7 +32,9 @@ async def install(app, pilot, mode="easy", level=1, count=2, blocked=False):
     app.start_game(mode)
     await pilot.pause()
     app.game = GameRun._level(mode, "controller-test", level, False)
+    lives = app.game.session.lives
     app.game.session = GameSession(small_board(count, blocked))
+    app.game.session.lives = lives
     app.reset_visuals()
     app.refresh_labels()
     await pilot.pause()
@@ -88,7 +90,7 @@ async def test_clear_waits_for_animation_then_next_enters_correct_tier(tmp_path)
         assert await pilot.click("#next-level", offset=(2, 1))
         await pilot.pause()
         assert app.page == "game" and game.level_index == 4
-        assert game.difficulty == "medium" and game.seconds_left == 600
+        assert game.difficulty == "medium" and game.seconds_left == 240
         assert game.outcome == "playing" and not game.counted
 
 

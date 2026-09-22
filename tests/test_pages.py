@@ -83,28 +83,28 @@ async def test_home_difficulty_game_navigation_and_paused_timers(tmp_path):
         assert app.page == "home"
         await start(pilot)
         assert app.page == "game"
-        assert app.game.seconds_left == 600
+        assert app.game.seconds_left == 240
         for forbidden in ("brand", "resolution", "minimize", "close", "level-tabs", "caption"):
             assert not app.screen.query("#" + forbidden)
         await advance(app, clock, pilot, 7)
-        assert app.game.seconds_left == 593
+        assert app.game.seconds_left == 233
         await pilot.press("escape")
         assert app.page == "menu"
         await advance(app, clock, pilot, 100)
-        assert app.game.seconds_left == 593
+        assert app.game.seconds_left == 233
         await click(pilot, "#open-settings")
         await advance(app, clock, pilot, 100)
-        assert app.game.seconds_left == 593
+        assert app.game.seconds_left == 233
         await pilot.press("escape")
         assert app.page == "menu"
         await click(pilot, "#open-saves")
         await advance(app, clock, pilot, 100)
-        assert app.game.seconds_left == 593
+        assert app.game.seconds_left == 233
         await pilot.press("escape")
         await click(pilot, "#go-home")
         assert app.page == "home"
         await advance(app, clock, pilot, 100)
-        assert app.game.seconds_left == 593
+        assert app.game.seconds_left == 233
         assert app.game.elapsed_seconds == 7
 
 
@@ -127,7 +127,7 @@ async def test_collision_animation_freezes_while_paused_and_resumes(tmp_path):
         await advance(app, clock, pilot, 1)
         assert app.animation is None
         assert blocked.id in app.failed_ids
-        assert app.game.seconds_left == pytest.approx(598.8)
+        assert app.game.seconds_left == pytest.approx(228.8)
 
 
 async def test_manual_slots_restore_exact_state_and_autosave_does_not_overwrite_them(tmp_path):

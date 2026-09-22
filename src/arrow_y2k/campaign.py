@@ -28,7 +28,7 @@ def difficulty_for_level(index: int, mode: str = "easy") -> str:
 
 
 def countdown(difficulty: str) -> float | None:
-    return {"easy": None, "medium": 600.0, "hard": 480.0, "endless": 30.0}[difficulty]
+    return {"easy": None, "medium": 240.0, "hard": 120.0, "endless": 30.0}[difficulty]
 
 
 @dataclass
@@ -55,6 +55,10 @@ class GameRun:
     @property
     def combo_bonus_seconds(self) -> int:
         return 3 + min(7, self.combo // 10)
+
+    @property
+    def collision_penalty_seconds(self) -> int:
+        return {"easy": 0, "medium": 10, "hard": 20, "endless": 20}[self.difficulty]
 
     @property
     def completion_id(self) -> str:
@@ -90,7 +94,10 @@ class GameRun:
                        "寻找畅通的头部射线，依次清空棋盘。")
         if mode == "endless":
             description = "连消增加时间；100 连击或剩余时间超过 15 分钟即可通关。"
-        return cls(GameSession(level.board), mode, difficulty, index, seed, countdown(difficulty),
+        session = GameSession(level.board)
+        if mode == "endless":
+            session.lives = 1
+        return cls(session, mode, difficulty, index, seed, countdown(difficulty),
                    name=f"{label} / {template.name}", description=description, tutorial=tutorial)
 
     @classmethod
@@ -111,8 +118,14 @@ class GameRun:
             return result
         if result.kind == "collision":
             self.combo = 0
+            if self.seconds_left is not None:
+                self.seconds_left = max(0.0, self.seconds_left - self.collision_penalty_seconds)
+            # The same collision may exhaust both lives and time; life loss wins.
             if self.session.status == "lost":
                 self.outcome, self.failure_reason = "lost", "lives"
+            elif self.seconds_left == 0:
+                self.outcome, self.failure_reason = "lost", "timeout"
+                self.session.status = "lost"
             return result
         self.combo += 1
         self.best_combo = max(self.best_combo, self.combo)
@@ -145,6 +158,7 @@ class GameRun:
         following = self._level(self.mode, self.seed, self.level_index + 1, self.tutorial)
         following.run_id = self.run_id
         if self.mode == "endless":
+            following.session.lives = min(3, self.session.lives + 1)
             following.seconds_left = self.seconds_left
             following.elapsed_seconds = self.elapsed_seconds
             following.combo = self.combo
@@ -155,6 +169,8 @@ class GameRun:
 
     def restart(self) -> None:
         self.session.restart()
+        if self.mode == "endless":
+            self.session.lives = 1
         self.seconds_left = countdown(self.difficulty)
         self.elapsed_seconds = 0.0
         self.combo = self.best_combo = 0

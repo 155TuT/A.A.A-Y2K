@@ -61,7 +61,7 @@ class DifficultyPage(Page):
                     unlocked = key in self.app.store.profile.unlocked_modes
                     yield Button(name if unlocked else name + " / 尚未解锁",
                                  id="start-" + key, disabled=not unlocked)
-                yield Static("所有模式从第 1 关编号开始。\n简单过第 3 关转中等；中等过第 10 关转困难。\n中等 10:00 / 困难 08:00 / 无尽 00:30", classes="mode-help")
+                yield Static("所有模式从第 1 关编号开始。\n简单过第 3 关转中等；中等过第 10 关转困难。\n中等 04:00 / 困难 02:00 / 无尽 00:30\n碰撞扣时：中等 10 秒；困难 / 无尽 20 秒。\n无尽 1 颗心起步，过关 +1，最多 3 颗。", classes="mode-help")
                 yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 

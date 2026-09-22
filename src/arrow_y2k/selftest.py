@@ -103,18 +103,18 @@ class CampaignContract(unittest.TestCase):
                 run.click(arrow_id)
             self.assertEqual(run.outcome, "level_won")
             self.assertTrue(run.advance())
-        self.assertEqual((run.level_index, run.difficulty, run.seconds_left), (4, "medium", 600.0))
+        self.assertEqual((run.level_index, run.difficulty, run.seconds_left), (4, "medium", 240.0))
 
     def test_countdown_and_terminal_state_ignore_further_ticks(self):
         run = GameRun.new("hard", "countdown")
         run.tick(1.25)
-        self.assertEqual((run.seconds_left, run.elapsed_seconds), (478.75, 1.25))
+        self.assertEqual((run.seconds_left, run.elapsed_seconds), (118.75, 1.25))
         run.tick(999)
-        self.assertEqual((run.seconds_left, run.elapsed_seconds, run.outcome), (0, 480, "lost"))
+        self.assertEqual((run.seconds_left, run.elapsed_seconds, run.outcome), (0, 120, "lost"))
         run.tick(100)
-        self.assertEqual(run.elapsed_seconds, 480)
+        self.assertEqual(run.elapsed_seconds, 120)
         run.restart()
-        self.assertEqual((run.seconds_left, run.elapsed_seconds, run.outcome), (480, 0, "playing"))
+        self.assertEqual((run.seconds_left, run.elapsed_seconds, run.outcome), (120, 0, "playing"))
 
     @staticmethod
     def endless(combo=0, seconds=30):
@@ -140,6 +140,64 @@ class CampaignContract(unittest.TestCase):
         self.assertEqual((run.seconds_left, run.outcome), (900, "playing"))
         run.click("1")
         self.assertEqual(run.outcome, "endless_won")
+
+
+    def test_collision_penalties_and_life_loss_priority(self):
+        board = Board(frozenset({(0, 0), (1, 0)}), (
+            Arrow("blocked", ((0, 0),), Direction.RIGHT),
+            Arrow("free", ((1, 0),), Direction.UP),
+        ))
+        for mode, penalty in (("easy", 0), ("medium", 10), ("hard", 20), ("endless", 20)):
+            with self.subTest(mode=mode):
+                run = GameRun.new(mode, "shared-penalty")
+                run.session = GameSession(board)
+                before = run.seconds_left
+                run.combo = run.best_combo = 9
+                self.assertEqual(run.collision_penalty_seconds, penalty)
+                self.assertEqual(run.click("blocked").kind, "collision")
+                self.assertEqual((run.session.lives, run.combo), (2, 0))
+                self.assertEqual(run.seconds_left, None if before is None else before - penalty)
+                self.assertEqual(run.elapsed_seconds, 0)
+                if not penalty:
+                    continue
+                for lives, reason in ((2, "timeout"), (1, "lives")):
+                    run.restart()
+                    run.session.lives = lives
+                    run.seconds_left = penalty / 2
+                    run.click("blocked")
+                    self.assertEqual((run.seconds_left, run.outcome, run.failure_reason), (0, "lost", reason))
+                    snapshot = run.to_dict()
+                    self.assertEqual(GameRun.from_dict(snapshot).to_dict(), snapshot)
+                    self.assertEqual(run.click("free").kind, "ignored")
+
+    def test_endless_initial_life_and_cross_level_recovery(self):
+        run = GameRun.new("endless", "shared-lives")
+        self.assertEqual((run.session.lives, run.seconds_left), (1, 30))
+        for lives, expected in ((1, 2), (2, 3), (3, 3)):
+            run.session = self.endless().session
+            run.session.lives = lives
+            for arrow_id in solve(run.session.current_board).order:
+                run.click(arrow_id)
+            before = (run.seconds_left, run.combo, run.elapsed_seconds)
+            self.assertTrue(run.advance())
+            self.assertEqual(run.session.lives, expected)
+            self.assertEqual((run.seconds_left, run.combo, run.elapsed_seconds), before)
+        run.restart()
+        self.assertEqual((run.session.lives, run.seconds_left, run.combo), (1, 30, 0))
+
+    def test_legacy_saves_keep_existing_time_and_lives(self):
+        for mode, seconds, lives, reset_seconds, reset_lives in (
+            ("medium", 597.25, 2, 240, 3), ("hard", 473.5, 1, 120, 3),
+            ("endless", 111.125, 3, 30, 1),
+        ):
+            with self.subTest(mode=mode):
+                saved = GameRun.new(mode, "legacy-shared").to_dict()
+                saved["run"]["seconds_left"] = seconds
+                saved["lives"] = lives
+                run = GameRun.from_dict(saved)
+                self.assertEqual(run.to_dict(), saved)
+                run.restart()
+                self.assertEqual((run.seconds_left, run.session.lives), (reset_seconds, reset_lives))
 
 
 class IsolatedStoreCase(unittest.TestCase):
@@ -329,13 +387,13 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(self.app.screen, GamePage)
             self.clock.value += 2.5
             self.app.tick()
-            self.assertAlmostEqual(self.app.game.seconds_left, 597.5)
+            self.assertAlmostEqual(self.app.game.seconds_left, 237.5)
             self.app.dispatch("open-settings")
             await pilot.pause()
             self.assertIsInstance(self.app.screen, SettingsPage)
             self.clock.value += 40
             self.app.tick()
-            self.assertAlmostEqual(self.app.game.seconds_left, 597.5)
+            self.assertAlmostEqual(self.app.game.seconds_left, 237.5)
             self.app.action_menu()
             await pilot.pause()
             self.app.dispatch("resume")
@@ -346,7 +404,7 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(self.app.screen, GamePage)
             self.clock.value += 0.5
             self.app.tick()
-            self.assertAlmostEqual(self.app.game.seconds_left, 597.0)
+            self.assertAlmostEqual(self.app.game.seconds_left, 237.0)
 
     async def test_autosave_disabled_persists_and_writes_no_slot(self):
         from textual.widgets import Switch
@@ -385,7 +443,7 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.app.game.to_dict(), expected)
             self.clock.value += 0.5
             self.app.tick()
-            self.assertAlmostEqual(self.app.game.seconds_left, 592.25)
+            self.assertAlmostEqual(self.app.game.seconds_left, 232.25)
 
 
     async def test_native_host_exports_integer_scaled_frame(self):
