@@ -261,7 +261,7 @@ def test_window_placement_keeps_integer_size_and_handles_negative_monitors():
 
 def test_sdl_actual_resize_repositions_into_selected_work_area(monkeypatch):
     from types import SimpleNamespace
-    from arrow_y2k.windowing import DesktopGeometry, WorkArea
+    from arrow_y2k.windowing import DesktopGeometry, WorkArea, place_window
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     import pygame
@@ -284,13 +284,14 @@ def test_sdl_actual_resize_repositions_into_selected_work_area(monkeypatch):
         host._set_resolution("1280x720")
         host._window.position = (640, 500)
         host._set_resolution("1920x1080")
-        assert tuple(host._window.position) == (640, 320)
-        assert pygame.display.get_window_size() == (1920, 1080)
+        expected = place_window(host.shell.outer_size, WorkArea(0, 0, 2560, 1400), (640, 500))
+        assert tuple(host._window.position) == expected
+        assert pygame.display.get_window_size() == host.shell.outer_size
         host._set_resolution("1280x720")
         host._window.position = (-1700, 200)
         host._set_resolution("1920x1080")
         assert tuple(host._window.position) == (-1920, 0)
-        assert pygame.display.get_window_size() == (1920, 1080)
+        assert pygame.display.get_window_size() == host.shell.outer_size
     finally:
         pygame.display.quit()
 

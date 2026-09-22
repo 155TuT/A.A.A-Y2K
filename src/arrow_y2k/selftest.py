@@ -632,13 +632,148 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertTrue(not select.expanded and select.value == '1920x1080')
 
-    async def test_native_host_exports_integer_scaled_frame(self):
+    async def test_crt_glass_routes_clicks_text_and_power_off_without_changing_rules(self):
+        from .app import ArrowApp
+        from .desktop import PixelHost, RESOLUTIONS, compose_frame
+        from .pixels import board_metrics
+        from .crt import SHUTDOWN_DURATION, SHUTDOWN_SHAKE_SECONDS
+        from textual.widgets import Input
+        from PIL import Image
+        self.assertAlmostEqual(SHUTDOWN_DURATION - SHUTDOWN_SHAKE_SECONDS, 1.0)
+        with patch.dict("os.environ", {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy",
+                                       "PYGAME_HIDE_SUPPORT_PROMPT": "1"}):
+            import pygame
+            pygame.display.init()
+            try:
+                for name, preset in RESOLUTIONS.items():
+                    with self.subTest(resolution=name):
+                        clock = FixedClock()
+                        app = ArrowApp(data_dir=Path(self.temporary.name) / name, seed="crt-input", clock=clock)
+                        app.audio.configure(0, 0, True)
+                        host = PixelHost(app, name)
+                        host._pygame = pygame
+                        host._set_resolution(name, notify=False)
+                        app.host_action = host.handle_action
+                        host.running = True
+                        async with app.run_test(size=preset.terminal_size) as pilot:
+                            await pilot.pause()
+                            async def click_source(source):
+                                point = host.shell.forward_point(source)
+                                self.assertIsNotNone(point)
+                                for kind in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                                    host.process_event(pygame.event.Event(kind, button=1, pos=point))
+                                await pilot.pause()
+                            async def click_widget(selector):
+                                r = app.screen.query_one(selector).region
+                                await click_source((r.x * 6 + r.width * 3, r.y * 12 + r.height * 6))
+                            async def press_control(control):
+                                x, y, w, h = host.shell.control_rects[control]
+                                point = (x + w // 2, y + h // 2)
+                                for kind in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                                    host.process_event(pygame.event.Event(kind, button=1, pos=point))
+                                await pilot.pause()
+                            def escape():
+                                host.process_event(pygame.event.Event(pygame.KEYDOWN,
+                                    key=pygame.K_ESCAPE, unicode="", mod=0))
+                            await click_widget("#open-settings")
+                            self.assertEqual(app.page, "settings")
+                            await click_widget("#cfg-save-minutes")
+                            host.process_event(pygame.event.Event(pygame.KEYDOWN,
+                                key=pygame.K_a, unicode="", mod=pygame.KMOD_CTRL | pygame.KMOD_SHIFT))
+                            await pilot.pause()
+                            host.process_event(pygame.event.Event(pygame.TEXTINPUT, text="4"))
+                            await pilot.pause()
+                            self.assertEqual(app.screen.query_one("#cfg-save-minutes", Input).value, "4")
+                            await click_widget("#settings-audio")
+                            await press_control("plus")
+                            self.assertEqual(app.screen.query_one("#cfg-master", Input).value, "70")
+                            self.assertEqual(app.audio.master_volume, .70)
+                            self.assertEqual(GameStore(app.store.root).settings.master_volume, .70)
+                            await press_control("minus")
+                            self.assertEqual(app.screen.query_one("#cfg-master", Input).value, "65")
+                            await press_control("menu")
+                            self.assertTrue(app.store.settings.monochrome)
+                            self.assertTrue(GameStore(app.store.root).settings.monochrome)
+                            await press_control("menu")
+                            self.assertFalse(app.store.settings.monochrome)
+                            self.assertFalse(GameStore(app.store.root).settings.monochrome)
+                            # Releasing outside a physical key cancels the action.
+                            x, y, w, h = host.shell.control_rects["plus"]
+                            host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                                                 pos=(x + w // 2, y + h // 2)))
+                            host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(10, 10)))
+                            self.assertEqual(app.audio.master_volume, .65)
+                            await click_widget("#go-home")
+                            self.assertEqual(app.page, "home")
+                            escape()
+                            await pilot.pause()
+                            self.assertEqual(app.page, "exit-confirm")
+                            await click_widget("#cancel-exit")
+                            self.assertEqual(app.page, "home")
+                            await click_widget("#new-game")
+                            await click_widget("#start-easy")
+                            self.assertEqual(app.page, "game")
+                            count = len(app.session.remaining)
+                            for arrow_id in solve(app.session.current_board).order[:2]:
+                                board = app.screen.query_one("#board")
+                                r = board.content_region
+                                g = board_metrics(r.width * 6, r.height * 12, app.session.board.mask)
+                                cell = app.session.remaining[arrow_id].head
+                                await click_source((r.x * 6 + g.origin_x + ((cell[0] - g.min_x) * 16 + 8) * g.scale,
+                                                    r.y * 12 + g.origin_y + ((cell[1] - g.min_y) * 16 + 8) * g.scale))
+                            self.assertEqual(len(app.session.remaining), count - 2)
+                            # Display/audio controls must not dispatch gameplay events.
+                            snapshot = app.game.to_dict()
+                            for control, rect in host.shell.control_rects.items():
+                                if control == "power":
+                                    continue
+                                x, y, w, h = rect
+                                point = (x + w // 2, y + h // 2)
+                                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=point))
+                                self.assertEqual(host._pressed_control, control)
+                                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=point))
+                                self.assertIsNone(host._pressed_control)
+                            self.assertEqual(app.game.to_dict(), snapshot)
+                            self.assertTrue(app.store.settings.monochrome)
+                            frame = host.shell.render(compose_frame(app, preset.logical_size), 2, monochrome=True)
+                            self.assertEqual(frame.mode, "RGBA")
+                            self.assertEqual(frame.getpixel((0, 0))[3], 0)
+                            x, y, w, h = host.shell.viewport
+                            rgb = frame.crop((x, y, x + w, y + h)).convert("RGB").split()
+                            self.assertEqual(rgb[0].tobytes(), rgb[1].tobytes())
+                            self.assertEqual(rgb[1].tobytes(), rgb[2].tobytes())
+                            with patch.object(app.store, "save_slot", wraps=app.store.save_slot) as save:
+                                x, y, w, h = host.shell.control_rects["power"]
+                                point = (x + w // 2, y + h // 2)
+                                for kind in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                                    host.process_event(pygame.event.Event(kind, button=1, pos=point))
+                                host.process_event(pygame.event.Event(pygame.QUIT))
+                                app.request_desktop_exit()
+                                self.assertEqual(save.call_count, 1)
+                            self.assertTrue(app._desktop_closing and host.running)
+                            self.assertIsNotNone(host._shutdown_started)
+                            self.assertFalse(app._exit)
+                            clock.value += 50
+                            app.tick()
+                            self.assertEqual(app.game.to_dict(), snapshot)
+                            self.assertEqual(app.store.load_slot(0).to_dict(), snapshot)
+                            signal = host.shell.render(Image.new("RGB", preset.logical_size), 2,
+                                                       shutdown_elapsed=SHUTDOWN_SHAKE_SECONDS + .5)
+                            self.assertEqual(signal.size, host.shell.outer_size)
+                            host._finish_exit()
+                            self.assertFalse(host.running)
+            finally:
+                pygame.display.quit()
+
+    async def test_native_host_exports_integer_scaled_crt_frame(self):
         from PIL import Image, ImageChops
         from .desktop import run_desktop
         path = Path(self.temporary.name) / "native-frame.png"
         with patch.dict("os.environ", {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy",
                                        "PYGAME_HIDE_SUPPORT_PROMPT": "1"}):
-            await run_desktop(self.app, "1024x768", screenshot_path=path, quit_after=0.1)
+            with patch.object(self.app, "finish_desktop_exit", wraps=self.app.finish_desktop_exit) as finish:
+                await run_desktop(self.app, "1024x768", screenshot_path=path, quit_after=0.1)
+                self.assertEqual(finish.call_count, 1)
             # Both SDL's close event and a Textual menu exit may end the app
             # between the host loop's event pump and its next composition.
             import asyncio
@@ -656,9 +791,12 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(run_desktop(closing, "1024x768"), timeout=4)
                 await closer
         with Image.open(path) as frame:
-            self.assertEqual(frame.size, (1024, 768))
-            enlarged = frame.resize((512, 384), Image.Resampling.NEAREST).resize(frame.size, Image.Resampling.NEAREST)
-            self.assertIsNone(ImageChops.difference(frame, enlarged).getbbox())
+            from .crt import CrtShell
+            self.assertEqual(frame.size, CrtShell((1024, 768), 2).outer_size)
+            enlarged = frame.resize(tuple(v // 2 for v in frame.size), Image.Resampling.NEAREST).resize(frame.size, Image.Resampling.NEAREST)
+            self.assertIsNone(ImageChops.difference(frame, enlarged).getbbox(alpha_only=False))
+            self.assertEqual(frame.mode, "RGBA")
+            self.assertEqual(frame.getpixel((0, 0))[3], 0)
 
 
 CONTRACT_CLASSES = (

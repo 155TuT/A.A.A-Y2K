@@ -1,8 +1,9 @@
 """Current controller integration: result accounting and run restoration."""
 import json
+from dataclasses import asdict
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import Input, Static, Switch
 
 from arrow_y2k.app import ArrowApp
 from arrow_y2k.campaign import GameRun
@@ -509,3 +510,196 @@ async def test_disabled_autosave_skips_initial_advance_restart_and_death_checkpo
     assert not (tmp_path / "slots" / "slot-0.json").exists()
     from arrow_y2k.storage import GameStore
     assert not GameStore(tmp_path).settings.autosave
+
+
+async def test_home_escape_confirmation_cancels_without_closing_and_confirms_once(tmp_path, monkeypatch):
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    host_actions, exited = [], []
+    app.host_action = host_actions.append
+    monkeypatch.setattr(app, "exit", lambda: exited.append(True))
+    async with app.run_test(size=(106, 30)) as pilot:
+        await pilot.press("escape")
+        assert app.page == "exit-confirm" and not app._desktop_closing
+        assert app.screen.query("#confirm-exit") and app.screen.query("#cancel-exit")
+        assert not app.screen.query("#resume")
+        await pilot.press("escape")
+        assert app.page == "home" and not host_actions
+        await pilot.press("escape")
+        assert await pilot.click("#cancel-exit", offset=(2, 1))
+        await pilot.pause()
+        assert app.page == "home" and not host_actions
+        await pilot.press("escape")
+        assert await pilot.click("#confirm-exit", offset=(2, 1))
+        await pilot.pause()
+        assert app._desktop_closing and host_actions == ["close"] and not exited
+        app.request_desktop_exit()
+        assert host_actions == ["close"]
+        app.finish_desktop_exit()
+        assert exited == [True]
+
+
+async def test_host_shutdown_saves_once_then_freezes_timer_keys_and_rule_input(tmp_path, monkeypatch):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "medium", count=3)
+        app.play_arrow("a0")
+        writes, host_actions, exited = [], [], []
+        original_save = app.store.save_slot
+        def record_save(index, run):
+            writes.append((index, run.to_dict()))
+            original_save(index, run)
+        def close_host(action):
+            host_actions.append(action)
+            # A host may route close through the app boundary again.
+            app.request_desktop_exit()
+        monkeypatch.setattr(app.store, "save_slot", record_save)
+        monkeypatch.setattr(app, "exit", lambda: exited.append(True))
+        app.host_action = close_host
+        app.autosave_elapsed = 179.9
+        clock.advance(.2)
+        app.request_desktop_exit()
+        snapshot = game.to_dict()
+        visuals = app.effects.animations
+        assert game.seconds_left == pytest.approx(239.8)
+        assert app._desktop_closing and host_actions == ["close"] and not exited
+        assert len(writes) == 1 and writes[0] == (0, snapshot)
+        assert app.store.load_slot(0).to_dict() == snapshot
+        assert visuals and visuals[0].progress > 0
+        clock.advance(1000)
+        app.tick()
+        assert app.consume_game_time() == 0
+        assert not app.auto_save()
+        app.click_cell((1, 0))
+        app.play_arrow("a1")
+        app.start_game("easy")
+        app.dispatch("go-home")
+        app.route("home")
+        await pilot.press("r", "h", "s", "escape", "ctrl+q")
+        app.request_desktop_exit()
+        assert app.page == "game" and app.game is game
+        assert game.to_dict() == snapshot and app.effects.animations == visuals
+        assert len(writes) == 1 and host_actions == ["close"] and not exited
+        app.finish_desktop_exit()
+        assert exited == [True] and len(writes) == 1
+
+
+def test_exit_without_host_finishes_immediately_and_is_idempotent(tmp_path, monkeypatch):
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    app.game = GameRun.new("medium", "headless-exit")
+    exited = []
+    monkeypatch.setattr(app, "exit", lambda: exited.append(True))
+    app.request_desktop_exit()
+    path = tmp_path / "slots" / "slot-0.json"
+    saved = path.read_bytes()
+    app.request_desktop_exit()
+    assert app._desktop_closing and exited == [True]
+    assert path.read_bytes() == saved
+    assert app.store.load_slot(0).to_dict() == app.game.to_dict()
+
+
+async def test_exit_desktop_button_does_not_add_escape_confirmation(tmp_path, monkeypatch):
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    host_actions = []
+    app.host_action = host_actions.append
+    async with app.run_test(size=(106, 30)) as pilot:
+        assert await pilot.click("#exit-desktop", offset=(2, 1))
+        await pilot.pause()
+        assert app.page == "home" and app._desktop_closing and host_actions == ["close"]
+
+
+
+def test_physical_volume_steps_are_exact_clamped_persistent_and_preserve_other_settings(tmp_path):
+    from arrow_y2k.storage import GameStore
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    cfg = app.store.settings
+    cfg.effects_volume, cfg.muted = .37, True
+    cfg.autosave, cfg.save_minutes = False, 7
+    cfg.resolution, cfg.reduced_motion, cfg.monochrome = "1920x1080", True, True
+    app.store.save_settings()
+    other = asdict(cfg)
+    other.pop("master_volume")
+    for delta, expected in [(5, value) for value in range(70, 101, 5)] + [(5, 100)] * 3 + [(-5, value) for value in range(95, -1, -5)] + [(-5, 0)] * 3:
+        assert app.adjust_master_volume(delta)
+        assert app.store.settings.master_volume == expected / 100
+        assert app.audio.master_volume == expected / 100
+        assert (app.audio.effects_volume, app.audio.muted) == (.37, True)
+        persisted = GameStore(tmp_path).settings
+        assert persisted.master_volume == expected / 100
+        unchanged = asdict(persisted)
+        unchanged.pop("master_volume")
+        assert unchanged == other
+    assert not app.toast_text and not app.toast_queue
+
+
+async def test_physical_volume_uses_current_edit_and_preserves_other_unsaved_audio_fields(tmp_path):
+    from arrow_y2k.storage import GameStore
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.dispatch("open-settings")
+        await pilot.pause()
+        app.dispatch("settings-audio")
+        await pilot.pause()
+        master = app.q("#cfg-master", Input)
+        effects = app.q("#cfg-effects", Input)
+        mute = app.q("#cfg-muted", Switch)
+        master.value, effects.value, mute.value = "42", "23", True
+        assert app.adjust_master_volume(5)
+        assert master.value == "47" and app.store.settings.master_volume == .47
+        assert effects.value == "23" and mute.value is True
+        assert app.store.settings.effects_volume == .7 and not app.store.settings.muted
+        assert app.audio.effects_volume == .7 and not app.audio.muted
+        assert "47%" in str(app.q("#settings-status", Static).render())
+        assert not app.toast_text and not app.toast_queue
+        for invalid in ("", "101", "-3", "4.5"):
+            master.value = invalid
+            previous = round(app.store.settings.master_volume * 100)
+            assert app.adjust_master_volume(-5)
+            assert master.value == str(previous - 5)
+            assert GameStore(tmp_path).settings.master_volume == (previous - 5) / 100
+            assert effects.value == "23" and mute.value is True
+        app.apply_settings()
+        assert app.store.settings.effects_volume == .23 and app.store.settings.muted
+        assert app.audio.effects_volume == .23 and app.audio.muted
+
+
+def test_physical_display_toggle_persists_and_two_presses_restore_color(tmp_path):
+    from arrow_y2k.storage import GameStore
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    original = asdict(app.store.settings)
+    assert app.toggle_display_mode()
+    assert app.store.settings.monochrome and GameStore(tmp_path).settings.monochrome
+    assert app.toggle_display_mode()
+    assert asdict(app.store.settings) == original
+    assert asdict(GameStore(tmp_path).settings) == original
+    assert not app.toast_text and not app.toast_queue
+
+
+@pytest.mark.parametrize("action", ["volume", "mode"])
+def test_physical_settings_failure_retains_disk_memory_and_audio(tmp_path, monkeypatch, action):
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    app.store.save_settings()
+    active = app.store.settings
+    before = (tmp_path / "settings.json").read_bytes()
+    audio_before = (app.audio.master_volume, app.audio.effects_volume, app.audio.muted)
+    def fail_replace(*args):
+        raise OSError("settings unavailable")
+    monkeypatch.setattr("arrow_y2k.storage.os.replace", fail_replace)
+    changed = app.adjust_master_volume(5) if action == "volume" else app.toggle_display_mode()
+    assert changed is False
+    assert app.store.settings is active
+    assert (tmp_path / "settings.json").read_bytes() == before
+    assert (app.audio.master_volume, app.audio.effects_volume, app.audio.muted) == audio_before
+    assert "设置保存失败" in app.toast_text
+
+
+def test_physical_settings_are_ignored_after_shutdown_starts(tmp_path):
+    app = ArrowApp(data_dir=tmp_path, clock=Clock())
+    app.store.save_settings()
+    original = asdict(app.store.settings)
+    before = (tmp_path / "settings.json").read_bytes()
+    app._desktop_closing = True
+    assert not app.adjust_master_volume(5)
+    assert not app.toggle_display_mode()
+    assert asdict(app.store.settings) == original
+    assert (tmp_path / "settings.json").read_bytes() == before

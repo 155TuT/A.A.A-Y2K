@@ -4,6 +4,7 @@ import math
 import secrets
 import time
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 from textual.app import App
 from textual.binding import Binding
@@ -44,6 +45,7 @@ class ArrowApp(App):
         self.audio = AudioController(cfg.master_volume, cfg.effects_volume, cfg.muted)
         self.resolution_name = cfg.resolution
         self.host_action = None
+        self._desktop_closing = False
         self.game: GameRun | None = None
         self.page = "home"
         self._page_ready = False
@@ -116,6 +118,8 @@ class ArrowApp(App):
         self.refresh_labels()
 
     def route(self, page):
+        if self._desktop_closing:
+            return
         self.consume_game_time()
         if self.page == "editor":
             self.capture_editor()
@@ -216,6 +220,8 @@ class ArrowApp(App):
         self.cursor = min(self.session.board.mask, key=lambda c: (c[1], c[0])) if self.game else (0, 0)
 
     def start_game(self, mode):
+        if self._desktop_closing:
+            return
         if mode not in self.store.profile.unlocked_modes:
             self.show_toast("模式尚未解锁")
             return
@@ -228,7 +234,7 @@ class ArrowApp(App):
         self.route("game")
 
     def click_cell(self, cell):
-        if self.page != "game" or not self.game or self.game.outcome != "playing":
+        if self._desktop_closing or self.page != "game" or not self.game or self.game.outcome != "playing":
             return
         self.cursor = cell
         arrow_id = self.session.current_board.occupancy.get(cell)
@@ -237,7 +243,7 @@ class ArrowApp(App):
             self.play_arrow(arrow_id)
 
     def play_arrow(self, arrow_id):
-        if not self.game or self.game.outcome != "playing":
+        if self._desktop_closing or not self.game or self.game.outcome != "playing":
             return
         self.consume_game_time()
         if self.game.outcome != "playing":
@@ -265,7 +271,9 @@ class ArrowApp(App):
             self.sound("click")
         self.refresh_labels()
 
-    def consume_game_time(self):
+    def consume_game_time(self, *, save_due=True):
+        if self._desktop_closing:
+            return 0.0
         now = self.clock()
         dt = max(0.0, now - self.last_tick)
         self.last_tick = now
@@ -274,12 +282,12 @@ class ArrowApp(App):
         self.game.tick(dt)
         self.failed_ids.update(self.effects.advance(dt))
         self.autosave_elapsed += dt
-        if self.store.settings.autosave and self.autosave_elapsed >= self.store.settings.save_minutes * 60:
+        if save_due and self.store.settings.autosave and self.autosave_elapsed >= self.store.settings.save_minutes * 60:
             self.auto_save()
         return dt
 
     def tick(self):
-        if not self.is_mounted or not self.screen_stack:
+        if self._desktop_closing or not self.is_mounted or not self.screen_stack:
             return
         dt = self.consume_game_time()
         if self.toast_text or self.toast_queue:
@@ -296,6 +304,8 @@ class ArrowApp(App):
         self.refresh_labels()
 
     def process_result(self):
+        if self._desktop_closing:
+            return
         game = self.game
         self.auto_solving = False
         if not game.counted:
@@ -320,6 +330,8 @@ class ArrowApp(App):
             self.route("result")
 
     def auto_save(self):
+        if self._desktop_closing:
+            return False
         self.autosave_elapsed = 0.0
         game = self.game
         if not game or not self.store.settings.autosave:
@@ -338,7 +350,13 @@ class ArrowApp(App):
             return False
 
     def action_menu(self):
-        if self.page == "menu":
+        if self._desktop_closing:
+            return
+        if self.page == "home":
+            self.route("exit-confirm")
+        elif self.page == "exit-confirm":
+            self.route("home")
+        elif self.page == "menu":
             self.route(self.paused_page)
         else:
             self.paused_page = self.page
@@ -348,13 +366,27 @@ class ArrowApp(App):
         self.request_desktop_exit()
 
     def request_desktop_exit(self):
-        self.consume_game_time()
+        if self._desktop_closing:
+            return
+        # Settle the last active instant, but leave this boundary as the only
+        # save writer even when the periodic timer expires in the same frame.
+        self.consume_game_time(save_due=False)
         self.auto_save()
+        self._desktop_closing = True
+        self.auto_solving = False
+        self.reset_pointer_state()
         self.audio.close()
+        if self.host_action is not None:
+            self.host_action("close")
+        else:
+            self.finish_desktop_exit()
+
+    def finish_desktop_exit(self):
+        """The host calls this only after its visual shutdown has completed."""
         self.exit()
 
     def action_hint(self):
-        if self.page != "game" or not self.game or self.game.outcome != "playing":
+        if self._desktop_closing or self.page != "game" or not self.game or self.game.outcome != "playing":
             return
         solution = solve(self.session.current_board)
         self.hint_id = solution.order[0] if solution.order else None
@@ -362,7 +394,7 @@ class ArrowApp(App):
         self.refresh_labels()
 
     def action_solve(self):
-        if self.page != "game" or self.game.outcome != "playing":
+        if self._desktop_closing or self.page != "game" or not self.game or self.game.outcome != "playing":
             return
         self.auto_solving = not self.auto_solving
         if self.auto_solving:
@@ -371,7 +403,7 @@ class ArrowApp(App):
         self.refresh_labels()
 
     def action_restart(self):
-        if self.page not in ("game", "result") or not self.game:
+        if self._desktop_closing or self.page not in ("game", "result") or not self.game:
             return
         if not self.game.custom and self.game.outcome == "playing" and not self.game.assisted:
             self.awards(self.achievements.record_loss())
@@ -381,8 +413,58 @@ class ArrowApp(App):
         self.message = "重新开始。"
         self.route("game")
 
+    def _save_device_settings(self, settings):
+        try:
+            self.store.save_settings(settings)
+        except DomainStorageError as error:
+            self.show_toast("设置保存失败", str(error))
+            return False
+        return True
+
+    def adjust_master_volume(self, delta: int):
+        """The CRT volume keys adjust integer percentage points, then persist."""
+        if self._desktop_closing:
+            return False
+        if type(delta) is not int:
+            raise ValueError("音量步进须为整数百分点。")
+        cfg = self.store.settings
+        percent = round(cfg.master_volume * 100)
+        field = None
+        if self.screen_stack and self.page == "settings" and self.settings_section == "audio":
+            matches = self.screen.query("#cfg-master")
+            if matches:
+                field = matches.first(Input)
+                try:
+                    edited = int(field.value)
+                except ValueError:
+                    pass
+                else:
+                    if 0 <= edited <= 100:
+                        percent = edited
+        percent = max(0, min(100, percent + delta))
+        candidate = replace(cfg, master_volume=percent / 100)
+        if not self._save_device_settings(candidate):
+            return False
+        self.audio.configure(candidate.master_volume, candidate.effects_volume, candidate.muted)
+        if field is not None:
+            field.value = str(percent)
+            self.set_text("#settings-status", f"主音量已保存：{percent}%")
+        return True
+
+    def toggle_display_mode(self):
+        """Persist the physical M key's monochrome mode without touching forms."""
+        if self._desktop_closing:
+            return False
+        candidate = replace(self.store.settings, monochrome=not self.store.settings.monochrome)
+        if not self._save_device_settings(candidate):
+            return False
+        if self.screen_stack and self.page == "settings" and self.settings_section == "video":
+            self.set_text("#settings-status", "显示模式已保存：" + ("单色" if candidate.monochrome else "彩色"))
+        return True
+
     def apply_settings(self):
-        from dataclasses import replace
+        if self._desktop_closing:
+            return
         cfg = replace(self.store.settings)
         if self.settings_section == "basic":
             cfg.autosave = self.q("#cfg-autosave", Switch).value
@@ -396,8 +478,7 @@ class ArrowApp(App):
             cfg.reduced_motion = self.q("#cfg-motion", Switch).value
         cfg.validate()
         old_resolution = self.store.settings.resolution
-        self.store.settings = cfg
-        self.store.save_settings()
+        self.store.save_settings(cfg)
         self.audio.configure(cfg.master_volume, cfg.effects_volume, cfg.muted)
         self.autosave_elapsed = 0.0
         self.resolution_name = cfg.resolution
@@ -439,7 +520,7 @@ class ArrowApp(App):
                               int(self.q("#length", Input).value), int(self.q("#turns", Input).value) / 100)
 
     def paint_cell(self, cell, *, erase=False):
-        if cell is None:
+        if self._desktop_closing or cell is None:
             return
         before = cell in self.editor_mask
         self.editor_mask.discard(cell) if erase else self.editor_mask.add(cell)
@@ -496,14 +577,20 @@ class ArrowApp(App):
 
     @on(Select.Changed, "#map-catalog")
     def select_map(self, event):
-        if self.page == "editor" and isinstance(event.value, str) and event.value != self.editor_selection:
+        if not self._desktop_closing and self.page == "editor" and isinstance(event.value, str) and event.value != self.editor_selection:
             self.load_editor(event.value)
             self.page = "home"
             self.route("editor")
 
     def dispatch(self, key):
+        if self._desktop_closing:
+            return
         try:
-            if key == "new-game":
+            if key == "cancel-exit" and self.page == "exit-confirm":
+                self.route("home")
+            elif key == "confirm-exit" and self.page == "exit-confirm":
+                self.request_desktop_exit()
+            elif key == "new-game":
                 self.route("difficulty")
             elif key.startswith("start-"):
                 self.start_game(key[6:])

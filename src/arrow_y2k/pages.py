@@ -106,6 +106,17 @@ class PausePage(Page):
         yield self.toast()
 
 
+class ExitConfirmPage(Page):
+    def compose(self):
+        yield self.header("EXIT / 退出确认")
+        with Center():
+            with Vertical(classes="center-menu"):
+                yield Static("确认要退出吗？", id="exit-question", classes="section-title")
+                yield PixelButton("确认退出", icon="exit", id="confirm-exit", classes="danger")
+                yield Button("取消", id="cancel-exit")
+        yield self.toast()
+
+
 class ResultPage(Page):
     def compose(self):
         game = self.app.game
@@ -241,5 +252,5 @@ class EditorPage(Page):
 
 
 PAGES = {"home": HomePage, "difficulty": DifficultyPage, "game": GamePage,
-         "menu": PausePage, "result": ResultPage, "saves": SavePage,
+         "menu": PausePage, "exit-confirm": ExitConfirmPage, "result": ResultPage, "saves": SavePage,
          "settings": SettingsPage, "achievements": AchievementsPage, "editor": EditorPage}

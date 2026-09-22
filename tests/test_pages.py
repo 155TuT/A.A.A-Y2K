@@ -295,7 +295,7 @@ async def test_all_pages_and_settings_fit_and_escape_navigation(tmp_path, size):
             visible_controls_fit(app)
             assert compose_frame(app, (size[0] * 6, size[1] * 12)).size == (size[0] * 6, size[1] * 12)
             await pilot.press("escape")
-            assert app.page == "menu", page
+            assert app.page == ("exit-confirm" if page == "home" else "menu"), page
             visible_controls_fit(app)
             await pilot.press("escape")
             assert app.page == page

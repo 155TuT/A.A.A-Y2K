@@ -102,3 +102,71 @@ class DesktopGeometry:
     def capture_pointer(self, enabled: bool) -> None:
         if self.sdl is not None:
             self.sdl.SDL_CaptureMouse(int(enabled))
+
+
+def mask_rectangles(mask):
+    """Compact a convex binary silhouette into adjacent horizontal rectangles."""
+    rectangles = []
+    previous = None
+    for y in range(mask.height):
+        bounds = mask.crop((0, y, mask.width, y + 1)).getbbox()
+        span = None if bounds is None else (bounds[0], bounds[2])
+        if span == previous and span is not None:
+            left, top, right, _ = rectangles[-1]
+            rectangles[-1] = (left, top, right, y + 1)
+        elif span is not None:
+            rectangles.append((span[0], y, span[1], y + 1))
+        previous = span
+    return rectangles
+
+
+class WindowShape:
+    """Clip the native Windows window to the same silhouette as the RGBA art.
+
+    SetWindowRgn transfers region ownership to Windows on success:
+    https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowrgn
+    Backends without region support use the shell's flat plastic corner color;
+    the portable rendered frame still carries its transparent alpha corners.
+    """
+    def __init__(self, pygame):
+        self.pygame = pygame
+        self.applied = False
+
+    def apply(self, mask) -> bool:
+        import sys
+        self.applied = False
+        if sys.platform != "win32" or self.pygame.display.get_driver() != "windows":
+            return False
+        from ctypes import wintypes
+        hwnd = self.pygame.display.get_wm_info()["window"]
+        gdi = ctypes.WinDLL("gdi32", use_last_error=True)
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        gdi.CreateRectRgn.argtypes = [ctypes.c_int] * 4
+        gdi.CreateRectRgn.restype = wintypes.HRGN
+        gdi.CombineRgn.argtypes = [wintypes.HRGN, wintypes.HRGN, wintypes.HRGN, ctypes.c_int]
+        gdi.CombineRgn.restype = ctypes.c_int
+        gdi.DeleteObject.argtypes = [wintypes.HANDLE]
+        gdi.DeleteObject.restype = wintypes.BOOL
+        user.SetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+        user.SetWindowRgn.restype = ctypes.c_int
+        region = gdi.CreateRectRgn(0, 0, 0, 0)
+        if not region:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            for rectangle in mask_rectangles(mask):
+                part = gdi.CreateRectRgn(*rectangle)
+                if not part:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    if not gdi.CombineRgn(region, region, part, 2):  # RGN_OR
+                        raise ctypes.WinError(ctypes.get_last_error())
+                finally:
+                    gdi.DeleteObject(part)
+            if not user.SetWindowRgn(hwnd, region, True):
+                raise ctypes.WinError(ctypes.get_last_error())
+            region = None  # Windows now owns it; do not delete or reuse it.
+            self.applied = True
+            return True
+        finally:
+            if region:
+                gdi.DeleteObject(region)

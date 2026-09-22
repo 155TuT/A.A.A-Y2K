@@ -1,10 +1,10 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 
 import pytest
 
 from arrow_y2k.generation import GenerateConfig, template_mask
-from arrow_y2k.storage import DomainStorageError, GameStore, Profile
+from arrow_y2k.storage import DomainStorageError, GameStore, Profile, Settings
 
 
 def test_settings_profile_persist_in_injected_directory(tmp_path):
@@ -160,3 +160,43 @@ def test_map_import_validates_generation_parameter_types(tmp_path, field, value)
     with pytest.raises(DomainStorageError):
         store.import_custom_map(path)
     assert store.list_custom_maps() == [item]
+
+
+
+def test_old_settings_load_with_color_mode_default_and_new_mode_round_trips(tmp_path):
+    store = GameStore(tmp_path)
+    store.settings.master_volume = .4
+    store.save_settings()
+    path = tmp_path / "settings.json"
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    del legacy["settings"]["monochrome"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    loaded = GameStore(tmp_path)
+    assert not loaded.settings.monochrome and loaded.settings.master_volume == .4
+    assert not loaded.warnings
+    loaded.save_settings(replace(loaded.settings, monochrome=True))
+    reopened = GameStore(tmp_path)
+    assert reopened.settings.monochrome and reopened.settings.master_volume == .4
+
+
+@pytest.mark.parametrize("invalid", [0, 1, "true", None])
+def test_monochrome_setting_requires_a_real_boolean(invalid):
+    with pytest.raises(DomainStorageError):
+        Settings(monochrome=invalid).validate()
+
+
+def test_candidate_settings_write_failure_preserves_active_settings_and_file(tmp_path, monkeypatch):
+    store = GameStore(tmp_path)
+    store.save_settings()
+    active = store.settings
+    path = tmp_path / "settings.json"
+    before = path.read_bytes()
+    def fail_replace(*args):
+        raise OSError("settings locked")
+    monkeypatch.setattr("arrow_y2k.storage.os.replace", fail_replace)
+    with pytest.raises(DomainStorageError):
+        store.save_settings(replace(active, monochrome=True, master_volume=.25))
+    assert store.settings is active
+    assert not store.settings.monochrome and store.settings.master_volume == .65
+    assert path.read_bytes() == before
+    assert not list(tmp_path.glob("*.tmp"))

@@ -176,7 +176,7 @@ async def test_hover_fill_stays_inside_outline_and_content_is_centered(tmp_path,
 
 
 @pytest.mark.parametrize("resolution", list(RESOLUTIONS))
-@pytest.mark.parametrize("page", ["difficulty", "settings", "achievements", "saves", "editor", "menu", "result"])
+@pytest.mark.parametrize("page", ["difficulty", "settings", "achievements", "saves", "editor", "menu", "result", "exit-confirm"])
 async def test_every_secondary_page_has_one_compact_header_home_action(tmp_path, page, resolution):
     app = make_app(tmp_path)
     preset = RESOLUTIONS[resolution]
@@ -302,3 +302,16 @@ async def test_minimize_uses_shared_yellow_action_style(tmp_path):
         await pilot.pause()
         assert button.styles.border_top[1].rgb == (210, 188, 111)
         assert button.styles.background.rgb == BACKGROUND
+
+
+async def test_exit_confirmation_page_composes_question_and_two_clear_actions(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.route("exit-confirm")
+        await pilot.pause()
+        assert str(app.screen.query_one("#exit-question").render()) == "确认要退出吗？"
+        confirm = app.screen.query_one("#confirm-exit", PixelButton)
+        cancel = app.screen.query_one("#cancel-exit", PixelButton)
+        assert confirm.label.plain == "确认退出" and confirm.icon == "exit"
+        assert confirm.has_class("danger") and cancel.label.plain == "取消"
+        assert confirm.region.y < cancel.region.y

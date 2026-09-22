@@ -49,9 +49,10 @@ class Settings:
     muted: bool = False
     resolution: str = "1280x720"
     reduced_motion: bool = False
+    monochrome: bool = False
 
     def validate(self) -> None:
-        for name in ("autosave", "muted", "reduced_motion"):
+        for name in ("autosave", "muted", "reduced_motion", "monochrome"):
             if type(getattr(self, name)) is not bool:
                 raise DomainStorageError(f"设置 {name} 必须为开关值。")
         if type(self.save_minutes) is not int or not 1 <= self.save_minutes <= 60:
@@ -262,10 +263,13 @@ class GameStore:
         if message not in self.warnings:
             self.warnings.append(message)
 
-    def save_settings(self) -> None:
-        self.settings.validate()
+    def save_settings(self, settings: Settings | None = None) -> None:
+        """Persist a candidate before committing it to the active settings."""
+        candidate = self.settings if settings is None else settings
+        candidate.validate()
         _atomic_json(self.root / "settings.json",
-                     {"schema_version": SCHEMA_VERSION, "settings": asdict(self.settings)})
+                     {"schema_version": SCHEMA_VERSION, "settings": asdict(candidate)})
+        self.settings = candidate
 
     def save_profile(self) -> None:
         payload = self.profile.to_dict()

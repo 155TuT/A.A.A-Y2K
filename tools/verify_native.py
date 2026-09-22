@@ -14,6 +14,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+from time import monotonic
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -31,6 +32,38 @@ async def wait_until(predicate, timeout=5):
         if monotonic() >= until:
             raise TimeoutError("Native verification fixture did not become ready")
         await asyncio.sleep(.02)
+
+
+def verify_window_region(host):
+    """Query Windows' actual drawing region, not just the exported PNG alpha."""
+    if not host.window_shape.applied:
+        raise AssertionError("Native rounded window region was not applied")
+    import ctypes
+    from ctypes import wintypes
+    from arrow_y2k.windowing import mask_rectangles
+    user, gdi = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
+    gdi.CreateRectRgn.argtypes = [ctypes.c_int] * 4
+    gdi.CreateRectRgn.restype = wintypes.HRGN
+    gdi.DeleteObject.argtypes = [wintypes.HANDLE]
+    user.GetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN]
+    user.GetWindowRgn.restype = ctypes.c_int
+    gdi.PtInRegion.argtypes = [wintypes.HRGN, ctypes.c_int, ctypes.c_int]
+    gdi.PtInRegion.restype = wintypes.BOOL
+    region = gdi.CreateRectRgn(0, 0, 0, 0)
+    try:
+        assert user.GetWindowRgn(host._pygame.display.get_wm_info()["window"], region) > 0
+        mask = host.shell.outer_mask
+        samples = {(0, 0), (mask.width-1,0), (0,mask.height-1), (mask.width-1,mask.height-1)}
+        for left, top, right, bottom in mask_rectangles(mask):
+            for y in {top, bottom-1}:
+                for x in {max(0,left-1),left,right-1,min(mask.width-1,right)}:
+                    samples.add((x,y))
+        for point in samples:
+            assert bool(gdi.PtInRegion(region,*point)) == bool(mask.getpixel(point)), point
+        return {"native_clip": True, "boundary_points_checked": len(samples),
+                "transparent_corners": True}
+    finally:
+        gdi.DeleteObject(region)
 
 
 async def source_host(output):
@@ -55,9 +88,9 @@ async def source_host(output):
             record["work_areas"] = [area.__dict__ for area in areas]
             record["native_global_pointer_available"] = geometry.global_pointer() is not None
             original = tuple(host._window.position)
-            area = choose_work_area(areas, (*original, 1280, 720))
+            area = choose_work_area(areas, (*original, *host.shell.outer_size))
             record["startup_position"] = original
-            assert original == place_window((1280, 720), area)
+            assert original == place_window(host.shell.outer_size, area)
 
             # An actual SDL window moves, but pointer samples come from a
             # deterministic fixture. Preserve the real capture/work-area APIs.
@@ -87,33 +120,105 @@ async def source_host(output):
             resize = []
             for name in ("1920x1080", "1024x768", "1280x720"):
                 old_position = tuple(host._window.position)
-                selected = choose_work_area(areas, (*old_position, host.resolution.width, host.resolution.height))
+                selected = choose_work_area(areas, (*old_position, *host.shell.outer_size))
                 host.handle_action("resolution:" + name)
                 await asyncio.sleep(.1)
-                size = (host.resolution.width, host.resolution.height)
+                size = host.shell.outer_size
                 position = tuple(host._window.position)
                 assert position == place_window(size, selected, old_position)
                 assert tuple(pygame.display.get_window_size()) == size
-                resize.append({"resolution": name, "position": position, "size": size})
+                resize.append({"resolution": name, "position": position, "size": size,
+                               "shape": verify_window_region(host)})
             record["native_resizes"] = resize
 
             with app._context():
-                app.action_menu()
+                app.route("menu")
             await wait_until(lambda: app.page == "menu" and app._page_ready)
             button = app.screen.query_one("#minimize", Button)
             app._set_mouse_over(button, button)
             button.add_class("-active")
             button.focus()
+            await wait_until(lambda: button.has_focus)
             host.handle_action("minimize")
             await asyncio.sleep(.15)
             assert app.mouse_over is None and app.hover_over is None
             assert not button.has_class("-active") and not button.has_focus
             host._window.restore()
             await asyncio.sleep(.2)
-            assert app.mouse_over is None and app.hover_over is None
             assert not button.has_class("-active") and not button.has_focus
+            # Restoring a real window may generate a fresh pointer event.
+            # Accept its current hit target; only an old, unrelated hover is
+            # a failure. A blanket "mouse_over is None" mistakes that normal
+            # new event for a stuck minimize state.
+            pointer = geometry.global_pointer()
+            expected_hover = None
+            point = None
+            if pointer is not None:
+                origin = tuple(host._window.position)
+                scale = host.resolution.scale
+                mapped = host.screen_point((pointer[0] - origin[0], pointer[1] - origin[1]))
+                point = (mapped[0] // 6, mapped[1] // 12) if mapped is not None else (-1, -1)
+                from textual.errors import NoWidget
+                try:
+                    expected_hover, _ = app.screen.get_widget_at(*point)
+                except NoWidget:
+                    pass
+            if app.mouse_over is not None:
+                assert app.mouse_over is expected_hover
+            if app.hover_over is not None:
+                assert app.hover_over is expected_hover
+            describe = lambda widget: None if widget is None else {
+                "type": type(widget).__name__, "id": widget.id}
+            record["restore_pointer"] = {
+                "global_position": pointer, "textual_cell": point,
+                "expected_hit": describe(expected_hover),
+                "mouse_over": describe(app.mouse_over), "hover_over": describe(app.hover_over),
+                "minimize_focused": button.has_focus, "minimize_active": button.has_class("-active"),
+            }
             record["minimize_restore_clears_transient_state"] = True
+            # Exercise the physical keys against the visible live settings page.
+            with app._context():
+                app.settings_section = "audio"
+                app.route("settings")
+            await wait_until(lambda: app._page_ready and bool(app.screen.query("#cfg-master")))
+            def panel_click(name):
+                x,y,w,h = host.shell.control_rects[name]
+                for event_type in (pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP):
+                    host.process_event(pygame.event.Event(event_type,button=1,pos=(x+w//2,y+h//2)))
+            panel_click("plus")
+            await wait_until(lambda: app.screen.query_one("#cfg-master").value == "70")
+            assert app.audio.master_volume == .70
+            panel_click("menu")
+            await asyncio.sleep(.15)
+            assert app.store.settings.monochrome
+            from PIL import Image
+            screen = Image.frombytes("RGB",host.shell.outer_size,pygame.image.tobytes(host._display,"RGB"))
+            x,y,w,h = host.shell.viewport
+            channels = screen.crop((x,y,x+w,y+h)).split()
+            assert channels[0].tobytes() == channels[1].tobytes() == channels[2].tobytes()
+            screen.save(output / "audio-monochrome.png")
+            panel_click("menu")
+            panel_click("minus")
+            await asyncio.sleep(.15)
+            assert not app.store.settings.monochrome and app.audio.master_volume == .65
+            record["panel_controls"] = {"volume_plus":70,"volume_minus":65,
+                                         "mode_round_trip":True,"all_inner_pixels_monochrome":True}
             record["scope"] = "Real SDL windows and positions; injected host drag coordinates; direct native minimize/restore; no manual or OS mouse drag replay"
+            # Capture the actual SDL surface while shutdown is still running.
+            shutdown_start = monotonic()
+            host._request_exit()
+            await asyncio.sleep(.45)
+            assert host.running and app._desktop_closing and not app._exit
+            signal_path = output / "shutdown-no-signal.png"
+            pygame.image.save(host._display, signal_path)
+            await task
+            shutdown_duration = monotonic() - shutdown_start
+            assert 1.30 <= shutdown_duration < 5
+            record["shutdown"] = {"duration_seconds": shutdown_duration,
+                                  "no_signal_capture_seconds": .45,
+                                  "screenshot": signal_path.name,
+                                  "sha256": sha256(signal_path),
+                                  "exit_finished": host._exit_finished}
         finally:
             host._request_exit()
             await task
@@ -123,6 +228,7 @@ async def source_host(output):
 def binary_frames(output, executable):
     from PIL import Image
     from arrow_y2k.desktop import RESOLUTIONS
+    from arrow_y2k.crt import CrtShell
     records = []
     for name, resolution in RESOLUTIONS.items():
         screenshot = output / f"{name}.png"
@@ -133,9 +239,11 @@ def binary_frames(output, executable):
             log = Path(data, "runtime.log")
             log_text = log.read_text(encoding="utf-8") if log.exists() else ""
             assert "Traceback" not in log_text
-        frame = Image.open(screenshot).convert("RGB")
-        assert frame.size == (resolution.width, resolution.height)
-        reduced = frame.resize(resolution.logical_size, Image.Resampling.NEAREST)
+        frame = Image.open(screenshot).convert("RGBA")
+        assert frame.getpixel((0,0))[3] == 0
+        shell = CrtShell((resolution.width, resolution.height), resolution.scale)
+        assert frame.size == shell.outer_size
+        reduced = frame.resize(tuple(v // resolution.scale for v in frame.size), Image.Resampling.NEAREST)
         assert reduced.resize(frame.size, Image.Resampling.NEAREST).tobytes() == frame.tobytes()
         records.append({"resolution": name, "size": frame.size, "scale": resolution.scale,
                         "exit_code": process.returncode, "screenshot": screenshot.name,

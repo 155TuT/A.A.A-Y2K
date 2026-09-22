@@ -24,7 +24,8 @@ from textual.errors import NoWidget
 
 from .fonts import CELL_HEIGHT, CELL_WIDTH, draw_text
 from .palette import rgb
-from .windowing import DesktopGeometry, choose_work_area, place_window
+from .windowing import DesktopGeometry, WindowShape, choose_work_area, place_window
+from .crt import CASE, CrtShell, SHUTDOWN_DURATION
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -208,18 +209,44 @@ class PixelHost:
         self._drag = None
         self._geometry = None
         self._exit_requested = False
+        self._exit_finished = False
+        self.shell = None
+        self._pressed_control = None
+        self._pointer_in_screen = False
+        self._shutdown_started = None
+        self._last_content = None
+        self.window_shape = None
 
     def _request_exit(self) -> None:
-        """All user exits cross the app boundary so its active game is saved."""
+        """Save once, then let the display complete its nonblocking power-off."""
         if self._exit_requested:
             return
         self._exit_requested = True
         callback = getattr(self.app, "request_desktop_exit", None)
         if callback is not None:
             callback()
+        if getattr(self.app, "finish_desktop_exit", None) is not None:
+            self._shutdown_started = monotonic()
+            self._reset_pointer()
         else:
-            self.app.exit()
+            # A generic embedding App need not implement the two-phase exit.
+            if callback is None:
+                self.app.exit()
+            self.running = False
+
+    def _finish_exit(self) -> None:
+        if self._exit_finished:
+            return
+        self._exit_finished = True
+        callback = getattr(self.app, "finish_desktop_exit", self.app.exit)
+        callback()
         self.running = False
+
+    def screen_point(self, point):
+        """Translate the screen inset and integer scale; glass never warps UI coordinates."""
+        if self.shell is None:
+            return tuple(coordinate // self.resolution.scale for coordinate in point)
+        return self.shell.input_point(point)
 
     def handle_action(self, action: str) -> None:
         """Small host capability boundary called by ordinary Textual buttons."""
@@ -245,21 +272,26 @@ class PixelHost:
         # Select the monitor using the OLD rectangle: a bigger new rectangle
         # could overlap an adjacent display and unexpectedly move there.
         previous = tuple(self._window.position) if self._window is not None else None
-        old_size = (self.resolution.width, self.resolution.height)
+        old_size = self.shell.outer_size if self.shell else (self.resolution.width, self.resolution.height)
         self._reset_pointer()
         self.resolution_name = name
         self.resolution = RESOLUTIONS[name]
-        size = (self.resolution.width, self.resolution.height)
+        self.shell = CrtShell((self.resolution.width, self.resolution.height), self.resolution.scale)
+        size = self.shell.outer_size
         self._display = self._pygame.display.set_mode(size, self._pygame.NOFRAME)
         self._window = self._pygame.Window.from_display_module()
         origin = previous if previous is not None else tuple(self._window.position)
         area = choose_work_area(self.geometry.work_areas(), (*origin, *old_size))
         self._window.position = place_window(size, area, previous)
+        self.window_shape = WindowShape(self._pygame)
+        self.window_shape.apply(self.shell.outer_mask)
         if notify:
             self.app.post_message(events.Resize.from_dimensions(self.resolution.terminal_size, self.resolution.logical_size))
 
     def _reset_pointer(self) -> None:
         self._drag = None
+        self._pressed_control = None
+        self._pointer_in_screen = False
         if self._geometry is not None:
             self.geometry.capture_pointer(False)
         callback = getattr(self.app, "reset_pointer_state", None)
@@ -343,6 +375,8 @@ class PixelHost:
     def process_event(self, event) -> None:
         """Forward an SDL event; this method can be exercised without OS input."""
         pg = self._pygame
+        if self._exit_requested:
+            return
         if event.type == pg.QUIT:
             self._request_exit()
         elif event.type == pg.KEYDOWN:
@@ -369,10 +403,45 @@ class PixelHost:
             if event.type == pg.WINDOWFOCUSGAINED:
                 self.app.post_message(events.AppFocus())
         elif event.type in (pg.MOUSEBUTTONDOWN, pg.MOUSEBUTTONUP, pg.MOUSEMOTION):
-            point = tuple(coordinate // self.resolution.scale for coordinate in event.pos)
-            if (event.type == pg.MOUSEBUTTONDOWN and event.button == 1
-                    and self._start_drag(event, point)):
+            point = self.screen_point(event.pos)
+            control = self.shell.control_at(event.pos) if self.shell else None
+            if self._pressed_control is not None:
+                if event.type == pg.MOUSEBUTTONUP and event.button == 1:
+                    pressed, self._pressed_control = self._pressed_control, None
+                    self.geometry.capture_pointer(False)
+                    if pressed == control:
+                        if control == "power":
+                            self._request_exit()
+                        elif control in ("plus", "minus"):
+                            callback = getattr(self.app, "adjust_master_volume", None)
+                            if callback is not None:
+                                with self.app._context():
+                                    callback(5 if control == "plus" else -5)
+                        elif control == "menu":
+                            callback = getattr(self.app, "toggle_display_mode", None)
+                            if callback is not None:
+                                with self.app._context():
+                                    callback()
                 return
+            if event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+                if control is not None:
+                    self._reset_pointer()
+                    self._pressed_control = control
+                    self.geometry.capture_pointer(True)
+                    return
+                if point is None and self.shell is not None:
+                    # Only visible plastic is a handle; transparent corners
+                    # must never capture a pointer from the desktop behind it.
+                    x, y = event.pos
+                    w, h = self.shell.outer_size
+                    if not (0 <= x < w and 0 <= y < h) or not self.shell.outer_mask.getpixel((x, y)):
+                        return
+                    self._reset_pointer()
+                    self._drag = (self.geometry.global_pointer(), tuple(self._window.position))
+                    self.geometry.capture_pointer(True)
+                    return
+                if self._start_drag(event, point):
+                    return
             if self._drag is not None:
                 if event.type == pg.MOUSEMOTION:
                     pointer_origin, window_origin = self._drag
@@ -388,6 +457,11 @@ class PixelHost:
                 elif event.type == pg.MOUSEBUTTONUP and event.button == 1:
                     self._reset_pointer()
                 return
+            if point is None:
+                if self._pointer_in_screen:
+                    self._reset_pointer()
+                return
+            self._pointer_in_screen = True
             mods = pg.key.get_mods()
             if event.type == pg.MOUSEBUTTONDOWN:
                 kind = {4: events.MouseScrollUp, 5: events.MouseScrollDown}.get(event.button, events.MouseDown)
@@ -427,6 +501,7 @@ class PixelHost:
         task = asyncio.create_task(self.app.run_async(headless=True, size=self.resolution.terminal_size, auto_pilot=on_ready))
         start = monotonic()
         last_frame = None
+        last_active_frame = None
         try:
             while not ready.is_set() and not task.done():
                 await asyncio.sleep(0.01)
@@ -443,23 +518,38 @@ class PixelHost:
                 if focused is not None:
                     r = focused.content_region
                     scale = self.resolution.scale
-                    pygame.key.set_text_input_rect((r.x * CELL_WIDTH * scale, r.y * CELL_HEIGHT * scale,
+                    ox, oy = self.shell.viewport[:2]
+                    pygame.key.set_text_input_rect((ox + r.x * CELL_WIDTH * scale, oy + r.y * CELL_HEIGHT * scale,
                                                     r.width * CELL_WIDTH * scale, r.height * CELL_HEIGHT * scale))
-                frame = compose_frame(self.app, self.resolution.logical_size)
-                last_frame = frame.resize((self.resolution.width, self.resolution.height), Image.Resampling.NEAREST)
-                surface = pygame.image.frombytes(last_frame.tobytes(), last_frame.size, "RGB")
+                shutdown_elapsed = None if self._shutdown_started is None else monotonic() - self._shutdown_started
+                if shutdown_elapsed is not None and shutdown_elapsed >= SHUTDOWN_DURATION:
+                    self._finish_exit()
+                    break
+                if shutdown_elapsed is None or self._last_content is None:
+                    self._last_content = compose_frame(self.app, self.resolution.logical_size)
+                settings = getattr(getattr(self.app, "store", None), "settings", None)
+                reduced = getattr(settings, "reduced_motion", False)
+                last_frame = self.shell.render(self._last_content, monotonic() - start,
+                                               pressed=self._pressed_control, shutdown_elapsed=shutdown_elapsed,
+                                               reduced_motion=reduced,
+                                               monochrome=getattr(settings, "monochrome", False))
+                if shutdown_elapsed is None:
+                    last_active_frame = last_frame
+                surface = pygame.image.frombytes(last_frame.tobytes(), last_frame.size, last_frame.mode)
+                self._display.fill(CASE)
                 self._display.blit(surface, (0, 0))
                 pygame.display.flip()
                 if quit_after is not None and monotonic() - start >= quit_after:
                     self._request_exit()
                 await asyncio.sleep(max(0, 1 / 60 - (monotonic() - frame_start)))
-            if screenshot_path is not None and last_frame is not None:
+            if screenshot_path is not None and last_active_frame is not None:
                 path = Path(screenshot_path)
                 path.parent.mkdir(parents=True, exist_ok=True)
-                last_frame.save(path)
+                last_active_frame.save(path)
         finally:
             if not task.done():
                 self._request_exit()
+                self._finish_exit()
             await task
             pygame.key.stop_text_input()
             pygame.display.quit()
