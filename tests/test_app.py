@@ -58,6 +58,9 @@ async def test_failure_routes_to_result_and_resets_official_streak(tmp_path, fai
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "medium", blocked=True)
         app.store.profile.current_streak = 5
+        assert app.auto_save()
+        live_snapshot = app.game.to_dict()
+        live_bytes = (tmp_path / "slots" / "slot-0.json").read_bytes()
         if failure == "timeout":
             await step(app, pilot, clock, 600)
             assert game.session.lives == 3
@@ -72,7 +75,8 @@ async def test_failure_routes_to_result_and_resets_official_streak(tmp_path, fai
         assert app.screen.query("#restart") and not app.screen.query("#next-level")
         summary = str(app.q("#result-summary", Static).render())
         assert ("时间耗尽" if failure == "timeout" else "生命耗尽") in summary
-        assert app.store.load_slot(0).to_dict() == game.to_dict()
+        assert app.store.load_slot(0).to_dict() == live_snapshot
+        assert (tmp_path / "slots" / "slot-0.json").read_bytes() == live_bytes
 
 
 async def test_clear_waits_for_animation_then_next_enters_correct_tier(tmp_path):
@@ -92,6 +96,7 @@ async def test_clear_waits_for_animation_then_next_enters_correct_tier(tmp_path)
         assert app.page == "game" and game.level_index == 4
         assert game.difficulty == "medium" and game.seconds_left == 240
         assert game.outcome == "playing" and not game.counted
+        assert app.store.load_slot(0).to_dict() == game.to_dict()
 
 
 async def test_fiftieth_level_shows_campaign_completion_and_unlocks_endless(tmp_path):
@@ -143,6 +148,7 @@ async def test_endless_clear_auto_advances_and_restoring_boundary_save_continues
         assert app.page == "game" and game.level_index == 2 and game.session.lives == 3
         assert (game.seconds_left, game.combo, game.best_combo, game.elapsed_seconds) == expected
         assert game.outcome == "playing" and not game.counted
+        assert app.store.load_slot(0).to_dict() == game.to_dict()
         # An exact boundary snapshot can also come from saving during the last exit animation.
         app.store.save_slot(1, GameRun.from_dict(boundary))
         app.dispatch("load-slot-1")
@@ -408,3 +414,98 @@ async def test_last_arrow_waits_for_all_inflight_visuals_before_result(tmp_path)
         assert app.page == "game" and not game.counted and app.effects.active
         await finish(app, pilot, clock)
         assert app.page == "result" and game.counted and not app.effects.active
+
+
+@pytest.mark.parametrize("failure", ["timeout", "lives"])
+async def test_fatal_frame_and_desktop_exit_keep_last_live_autosave_bytes(tmp_path, failure):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "medium", blocked=True)
+        app.store.settings.save_minutes = 1
+        if failure == "timeout":
+            game.seconds_left = .01
+        else:
+            game.session.lives = 1
+        assert app.auto_save()
+        path = tmp_path / "slots" / "slot-0.json"
+        checkpoint = path.read_bytes()
+        snapshot = game.to_dict()
+        if failure == "timeout":
+            # The deadline and autosave timer expire in the same frame.
+            app.autosave_elapsed = 59.99
+            clock.advance(.02)
+        else:
+            app.play_arrow("a0")
+            assert app.effects.active and app.page == "game"
+            app.autosave_elapsed = 60
+        # Close before the result page can settle the fatal frame or animation.
+        app.request_desktop_exit()
+        assert game.outcome == "lost" and game.failure_reason == failure
+        assert path.read_bytes() == checkpoint
+        assert app.store.load_slot(0).to_dict() == snapshot
+
+
+async def test_first_run_has_live_checkpoint_and_can_restore_after_failure(tmp_path):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock, seed="first-live-save")
+    async with app.run_test(size=(106, 30)) as pilot:
+        assert app.store.load_slot(0) is None
+        app.store.profile.unlocked_modes.add("hard")
+        app.start_game("hard")
+        await pilot.pause()
+        initial = app.game.to_dict()
+        path = tmp_path / "slots" / "slot-0.json"
+        checkpoint = path.read_bytes()
+        assert app.store.load_slot(0).to_dict() == initial
+        await step(app, pilot, clock, 120)
+        assert app.page == "result" and app.game.outcome == "lost"
+        app.dispatch("go-home")
+        await pilot.pause()
+        assert path.read_bytes() == checkpoint
+        app.dispatch("load-slot-0")
+        await pilot.pause()
+        assert app.page == "game" and app.game.to_dict() == initial
+        assert path.read_bytes() == checkpoint
+
+
+async def test_restart_replaces_auto_slot_with_restored_live_board(tmp_path):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "medium", blocked=True)
+        app.play_arrow("a0")
+        await finish(app, pilot, clock)
+        assert game.session.lives == 2 and game.seconds_left < 240
+        assert app.auto_save()
+        app.action_restart()
+        await pilot.pause()
+        saved = app.store.load_slot(0)
+        assert saved.to_dict() == game.to_dict()
+        assert saved.outcome == "playing" and saved.session.lives == 3
+        assert saved.seconds_left == 240 and saved.session.moves == 0
+
+
+async def test_disabled_autosave_skips_initial_advance_restart_and_death_checkpoints(tmp_path):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.store.settings.autosave = False
+        app.store.save_settings()
+        game = await install(app, pilot, "medium", count=1)
+        assert app.store.load_slot(0) is None
+        app.play_arrow("a0")
+        await finish(app, pilot, clock)
+        assert game.outcome == "level_won"
+        app.dispatch("next-level")
+        await pilot.pause()
+        assert game.level_index == 2
+        app.action_restart()
+        await pilot.pause()
+        assert app.store.load_slot(0) is None
+        await step(app, pilot, clock, 500)
+        assert game.outcome == "lost"
+        app.request_desktop_exit()
+    assert not (tmp_path / "slots" / "slot-0.json").exists()
+    from arrow_y2k.storage import GameStore
+    assert not GameStore(tmp_path).settings.autosave

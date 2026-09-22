@@ -163,7 +163,7 @@ class SettingsPage(Page):
                         yield Switch(cfg.autosave, animate=False, id="cfg-autosave")
                     yield Static("保存频率（分钟，1～60；游戏进行时计时）")
                     yield Input(str(cfg.save_minutes), type="integer", id="cfg-save-minutes")
-                    yield Static("默认 3 分钟；退出当前游戏前也保存。\n关闭后不再覆写自动槽，四个手动槽仍可使用。", classes="mode-help")
+                    yield Static("默认 3 分钟；存活时退出当前游戏前也保存。\n关闭后不再覆写自动槽，四个手动槽仍可使用。", classes="mode-help")
                 elif section == "audio":
                     with Horizontal(classes="setting-row"):
                         yield Static("静音")

@@ -218,6 +218,7 @@ class ArrowApp(App):
         seed = self.seed if self.seed is not None else secrets.token_hex(8)
         self.game = GameRun.new(mode, seed, tutorial=not self.store.profile.tutorial_completed)
         self.reset_visuals()
+        self.auto_save()
         self.message = self.game.description
         self.route("game")
 
@@ -306,6 +307,7 @@ class ArrowApp(App):
         if game.mode == "endless" and game.outcome == "level_won":
             game.advance()
             self.reset_visuals()
+            self.auto_save()
             self.message = game.description
             self.last_tick = self.clock()
             self.route("game")
@@ -314,10 +316,17 @@ class ArrowApp(App):
 
     def auto_save(self):
         self.autosave_elapsed = 0.0
-        if not self.game or not self.store.settings.autosave:
+        game = self.game
+        if not game or not self.store.settings.autosave:
+            return False
+        # A failed run must never replace the last recoverable automatic save.
+        # Completed boards remain useful checkpoints: loading them can advance.
+        if (game.outcome == "lost" or game.session.status == "lost"
+                or game.session.lives <= 0
+                or game.seconds_left is not None and game.seconds_left <= 0):
             return False
         try:
-            self.store.save_slot(0, self.game)
+            self.store.save_slot(0, game)
             return True
         except DomainStorageError as error:
             self.show_toast("自动保存失败", str(error))
@@ -363,6 +372,7 @@ class ArrowApp(App):
             self.awards(self.achievements.record_loss())
         self.game.restart()
         self.reset_visuals()
+        self.auto_save()
         self.message = "重新开始。"
         self.route("game")
 
@@ -473,6 +483,7 @@ class ArrowApp(App):
             self.game = GameRun.from_custom(frozenset(self.editor_mask), self.editor_config(), self.editor_difficulty)
             self.game.name = self.editor_name
             self.reset_visuals()
+            self.auto_save()
             self.message = self.game.description
             self.route("game")
             return
@@ -536,6 +547,7 @@ class ArrowApp(App):
             elif key == "next-level" and self.game:
                 if self.game.advance():
                     self.reset_visuals()
+                    self.auto_save()
                     self.message = self.game.description
                     self.route("game")
             elif key in ("hint", "solve", "restart"):

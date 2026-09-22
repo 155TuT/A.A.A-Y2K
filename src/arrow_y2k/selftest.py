@@ -530,6 +530,40 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.app.screen.ALLOW_SELECT)
             self.assertTrue(all(item.active_effect_duration == 0 for item in self.app.screen.query(Button)))
 
+    async def test_failure_keeps_last_living_auto_save_even_on_timer_and_exit(self):
+        self.app.store.profile.unlocked_modes.add("hard")
+        async with self.app.run_test(size=(120, 44)) as pilot:
+            for reason in ("lives", "timeout"):
+                with self.subTest(reason=reason):
+                    self.app.start_game("hard")
+                    await pilot.pause()
+                    self.assertIsNotNone(self.app.store.load_slot(0))
+                    self.app.game.session = GameSession(Board(frozenset({(0, 0), (1, 0)}), (
+                        Arrow("blocked", ((0, 0),), Direction.RIGHT),
+                        Arrow("free", ((1, 0),), Direction.UP),
+                    )))
+                    if reason == "lives":
+                        self.app.session.lives = 1
+                    else:
+                        self.app.game.seconds_left = .5
+                    self.app.auto_save()
+                    path = Path(self.temporary.name) / "slots" / "slot-0.json"
+                    before = path.read_bytes()
+                    if reason == "lives":
+                        self.app.play_arrow("blocked")
+                    self.app.autosave_elapsed = 181
+                    self.clock.value += 1.1
+                    self.app.tick()
+                    await pilot.pause()
+                    self.assertEqual(self.app.game.failure_reason, reason)
+                    self.assertFalse(self.app.auto_save())
+                    self.app.dispatch("go-home")
+                    await pilot.pause()
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertGreater(self.app.store.load_slot(0).session.lives, 0)
+            self.app.request_desktop_exit()
+            self.assertEqual(path.read_bytes(), before)
+
     async def test_native_host_exports_integer_scaled_frame(self):
         from PIL import Image, ImageChops
         from .desktop import run_desktop
