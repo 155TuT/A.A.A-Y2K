@@ -31,7 +31,13 @@ text retained to distinguish returning home from exiting the application.
 The footer reads `Made By 155TuT with GPT and ♥ Love`.
 
 `PixelButton` only decorates Textual's content area; Textual retains layout,
-focus, keyboard activation and hit testing.
+focus, keyboard activation and hit testing. Buttons disable the framework's
+0.2-second active gate, and focus no longer imitates a filled hover state.
+Settings tabs mark selection by outline. The disclosure component in each
+Select draws three integer-pixel dots using its outline colour; Switch has a
+complete green-toned outline and no default blue focus tint. Page-wide text
+selection is disabled so rapid double/triple clicks cannot highlight the
+board's surrounding text; Input editing remains available.
 
 The SDL host forwards close, Alt+F4 and the close capability to
 `app.request_desktop_exit()` so the app can save first. Window dragging is

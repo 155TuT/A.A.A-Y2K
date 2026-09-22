@@ -24,7 +24,7 @@
 | `__main__.py` | 源码和打包程序共用入口，无控制台进程的日志流适配 |
 | `selftest.py` | 源码和冻结程序共用的行为验证套件 |
 
-组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
+组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button`/`Select` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
 
 游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。
 
@@ -40,7 +40,9 @@
 
 ## 控件状态与原生窗口
 
-`PixelButton` 保留 Textual Button 的事件和标签，仅组合图标绘制内容。没有另写一套控件命中或导航规则。
+`Page` 禁止框架自动聚焦首个按钮，并关闭屏幕级文本选择；`RasterView` 自身也不可选中文字。输入框仍使用 Textual 的文本编辑行为。Button 关闭默认 0.2 秒 active gate，连续操作不被按压动画吞掉。选中设置标签、键盘焦点和鼠标 hover 使用不同样式；应用切页时统一清理旧指针捕获、焦点及按压状态。
+
+`PixelButton` 保留 Textual Button 的事件和标签，仅组合图标绘制内容；`PixelSelect` 保留原生 Select 的键盘和弹层行为，给既有展开指示组件组合一个圆点渲染器。没有另写一套控件命中或导航规则。
 
 ## 生成器为什么终止、有解
 

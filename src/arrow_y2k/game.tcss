@@ -1,7 +1,10 @@
 Screen { background: #10171b; color: #cfdbd4; layers: base overlay; }
 Page { background: #10171b; }
 Button { background: #10171b; color: #b9c9c0; border: solid #425f50; min-width: 8; height: 3; padding: 0; content-align: center middle; text-style: none; }
-Button:hover, Button:focus { background: #1c3028; color: #72d69c; border: solid #72d69c; text-style: none; }
+Button { background-tint: transparent; tint: transparent; }
+Button:focus { background: #10171b; color: #cfdbd4; border: solid #7d998a; text-style: none; background-tint: transparent; }
+Button:hover { background: #1c3028; color: #72d69c; border: solid #72d69c; text-style: none; }
+Button.-active { tint: transparent; background-tint: transparent; }
 Button.danger, Button.danger:focus { color: #eef4e9; border: solid #c96579; }
 Button.danger:hover { background: #3a232c; color: #eef4e9; border: solid #f07b90; }
 Button:disabled { color: #455950; border: solid #2b3d33; background: #10171b; }
@@ -75,3 +78,14 @@ SavePage > Button, AchievementsPage > Button { width: 26; height: 3; margin: 0 2
 #editor-side > Button { width: 100%; }
 
 #editor-canvas { width: 1fr; height: 1fr; }
+
+Select:focus > SelectCurrent { border: solid #72d69c; background-tint: transparent; }
+SelectCurrent .arrow { width: 3; padding: 0; color: #425f50; }
+Select:focus SelectCurrent .arrow { color: #72d69c; }
+Switch { width: 8; height: 3; padding: 0 1; border: solid #425f50; background: #10171b; background-tint: transparent; }
+Switch:focus { border: solid #7d998a; background: #10171b; background-tint: transparent; }
+Switch:hover { border: solid #72d69c; background: #1c3028; }
+Switch .switch--slider { color: #62796c; background: #20302a; }
+Switch.-on .switch--slider { color: #72d69c; background: #20302a; }
+Switch:hover .switch--slider { color: #8eaa9a; }
+Switch.-on:hover .switch--slider { color: #9ae6b4; }

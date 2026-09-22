@@ -332,3 +332,18 @@ async def test_all_hard_template_masks_fit_full_integer_pixels(tmp_path, size):
             assert geometry.origin_x >= 0 and geometry.origin_y >= 0, (size, template.id, geometry, view.region)
             assert view.native_frame(width, height).size == (width, height)
             visible_controls_fit(app)
+
+
+async def test_rapid_repeated_native_clicks_and_triple_clicks_never_select_game_text(tmp_path):
+    app, clock = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        await start(pilot, "easy")
+        legal_id = solve(app.session.current_board).order[0]
+        cell = app.session.remaining[legal_id].head
+        for _ in range(3):
+            await native_click(app, pilot, cell)
+        assert app.store.profile.total_arrows == 1
+        assert await pilot.click("#stats", offset=(1, 0), times=3)
+        await pilot.pause()
+        assert not app.screen.selections
+        assert not app.screen.query_one("#stats").text_selection

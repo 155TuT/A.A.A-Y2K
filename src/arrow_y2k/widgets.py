@@ -1,9 +1,9 @@
 """Raster widget inheritance shares native/terminal presentation and hit geometry."""
-from PIL import Image
+from PIL import Image, ImageDraw
 from rich.text import Text
 from rich.style import Style
 from rich.cells import cell_len
-from textual.widgets import Button
+from textual.widgets import Button, Select, Static
 from .icons import pixel_icon
 from textual import events
 from textual.widget import Widget
@@ -27,6 +27,7 @@ def half_blocks(image):
 
 
 class RasterView(Widget):
+    ALLOW_SELECT = False
     def native_frame(self, width, height):
         raise NotImplementedError
 
@@ -42,6 +43,7 @@ class PixelButton(Button):
         super().__init__(label, **kwargs)
         self.icon = icon
         self.icon_only = icon_only
+        self.active_effect_duration = 0
         if icon_only:
             self.add_class("icon-only")
             self.tooltip = label
@@ -67,6 +69,28 @@ class PixelButton(Button):
         if self.icon_only:
             return Text({"exit": "→", "github": "GH"}.get(self.icon, self.label.plain))
         return super().render()
+
+
+class DisclosureArt:
+    """A tiny renderer composed into the existing Select disclosure widget."""
+    def __init__(self, widget):
+        self.widget = widget
+
+    def __call__(self, width, height):
+        frame = Image.new("RGB", (width, height), (21, 35, 29))
+        draw = ImageDraw.Draw(frame)
+        center = height // 2
+        for x in (width // 2 - 6, width // 2, width // 2 + 6):
+            draw.ellipse((x - 1, center - 1, x + 1, center + 1), fill=self.widget.styles.color.rgb)
+        return frame
+
+
+class PixelSelect(Select):
+    """Keep Select's keyboard/popup behavior, replace only its disclosure glyph."""
+    def on_mount(self):
+        for arrow in self.query(".arrow"):
+            arrow.update("•••")
+            arrow.native_frame = DisclosureArt(arrow)
 
 
 class CreditsView(RasterView):

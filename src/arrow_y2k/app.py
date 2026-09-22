@@ -7,6 +7,7 @@ from collections import deque
 from pathlib import Path
 from textual.app import App
 from textual.binding import Binding
+from textual.geometry import Offset
 from textual import on
 from textual.widgets import Button, Input, Select, Static, Switch
 
@@ -25,6 +26,7 @@ class ArrowApp(App):
     CSS_PATH = "game.tcss"
     TITLE = "ARROW.AFTER.ARROW-Y2K"
     ENABLE_COMMAND_PALETTE = False
+    ALLOW_SELECT = False
     BINDINGS = [
         Binding("escape", "menu", "菜单", priority=True),
         Binding("ctrl+q", "quit", "退出", priority=True),
@@ -56,6 +58,7 @@ class ArrowApp(App):
         self.heart_progress = None
         self.heart_elapsed = None
         self.lost_index = None
+        self._label_values = {}
         self.hovered = self.hint_id = None
         self.cursor = (0, 0)
         self.failed_ids = set()
@@ -88,6 +91,20 @@ class ArrowApp(App):
     def allow_window_drag(self):
         return self.page not in ("game", "editor")
 
+    def reset_pointer_state(self):
+        if not self.screen_stack:
+            return
+        self._set_mouse_over(None, None)
+        self.mouse_position = Offset(-1, -1)
+        self.capture_mouse(None)
+        self.painting = 0
+        self.hovered = self.editor_hover = None
+        self.screen.clear_selection()
+        for widget in self.screen.query("Button, Switch"):
+            widget.remove_class("-active")
+        if isinstance(self.focused, (Button, Switch)):
+            self.screen.set_focus(None)
+
     def on_mount(self):
         self.push_screen(PAGES["home"]())
         self.set_interval(1 / 60, self.tick)
@@ -102,6 +119,8 @@ class ArrowApp(App):
         self.consume_game_time()
         if self.page == "editor":
             self.capture_editor()
+        self.reset_pointer_state()
+        self._label_values.clear()
         self._page_ready = False
         self.page = page
         self.painting = 0
@@ -113,8 +132,9 @@ class ArrowApp(App):
 
     def set_text(self, selector, text):
         matches = self.screen.query(selector)
-        if matches:
+        if matches and self._label_values.get(selector) != text:
             matches.first(Static).update(text)
+            self._label_values[selector] = text
 
     def refresh_labels(self):
         if not self.is_mounted or not self._page_ready or not self.screen_stack or not self.screen.is_mounted:
@@ -134,7 +154,10 @@ class ArrowApp(App):
             self.set_text("#timer", value)
             self.set_text("#combo", f"COMBO {game.combo:03d}  /  +{game.combo_bonus_seconds}s" if game.mode == "endless" else "")
             self.set_text("#status", self.message)
-            self.q("#solve", Button).label = "停止 S" if self.auto_solving else "演示 S"
+            solve_button = self.q("#solve", Button)
+            label = "停止 S" if self.auto_solving else "演示 S"
+            if str(solve_button.label) != label:
+                solve_button.label = label
             self.q("#board", object).refresh()
             self.q("#hearts", object).refresh()
         elif self.page == "result" and self.game:

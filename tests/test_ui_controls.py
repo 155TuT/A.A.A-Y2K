@@ -6,7 +6,7 @@ from arrow_y2k.app import ArrowApp
 from arrow_y2k.desktop import RESOLUTIONS, compose_frame, configure_native_colors
 from arrow_y2k.icons import pixel_icon
 from arrow_y2k.pixels import BACKGROUND, render_hearts
-from arrow_y2k.widgets import PixelButton
+from arrow_y2k.widgets import PixelButton, PixelSelect
 
 
 def make_app(path):
@@ -62,3 +62,78 @@ async def test_home_alignment_square_exit_and_icons_fit_each_resolution(tmp_path
             assert max(xs)-min(xs) == max(ys)-min(ys)
         for widget in app.screen.query("Button"):
             assert app.screen.region.contains_region(widget.region)
+
+
+async def test_settings_active_tab_does_not_leave_basic_focused_or_hovered(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        await pilot.click("#open-settings", offset=(2, 1))
+        await pilot.pause()
+        await pilot.hover("#settings-basic")
+        await pilot.click("#settings-video", offset=(2, 1))
+        await pilot.pause()
+        basic, video = app.q("#settings-basic", Button), app.q("#settings-video", Button)
+        assert not basic.has_class("selected") and not basic.has_focus and not basic.mouse_hover
+        assert video.has_class("selected")
+        select = app.q("#cfg-resolution", PixelSelect)
+        arrows = select.query(".arrow")
+        assert len(arrows) == 2
+        for arrow in arrows:
+            assert str(arrow.render()) == "•••"
+            image = arrow.native_frame(18, 12)
+            colored_columns = [x for x in range(18) if any(image.getpixel((x, y)) == arrow.styles.color.rgb for y in range(12))]
+            assert colored_columns == [2, 3, 4, 8, 9, 10, 14, 15, 16]
+        await pilot.click("#cfg-resolution", offset=(2, 1))
+        await pilot.pause()
+        assert select.expanded
+        await pilot.press("down", "enter")
+        assert select.value == "1920x1080"
+
+
+async def test_switch_focus_keeps_outline_and_button_presses_have_no_gate(tmp_path):
+    app = make_app(tmp_path)
+    played = []
+    app.audio.play = played.append
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.route("settings")
+        await pilot.pause()
+        switch = app.q("#cfg-autosave", Switch)
+        assert switch.value
+        await pilot.click("#cfg-autosave", offset=(2, 1))
+        await pilot.pause()
+        assert not switch.value and switch._slider_position == 0
+        frame = compose_frame(app, (640, 360))
+        r = switch.region
+        color = switch.styles.border_left[1].rgb
+        # Both vertical lines must survive the focus/press state.
+        left = [(x, y) for x in range(r.x*6, (r.x+1)*6) for y in range((r.y+1)*12, (r.y+2)*12) if frame.getpixel((x, y)) == color]
+        right = [(x, y) for x in range((r.right-1)*6, r.right*6) for y in range((r.y+1)*12, (r.y+2)*12) if frame.getpixel((x, y)) == color]
+        assert left and right
+        app.dispatch("settings-audio")
+        await pilot.pause()
+        preview = app.q("#audio-preview", Button)
+        assert preview.active_effect_duration == 0
+        preview.press()
+        preview.press()
+        await pilot.pause()
+        assert len(played) == 2
+        assert not preview.has_class("-active")
+
+
+async def test_game_text_selection_is_disabled_without_disabling_inputs(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.start_game("easy")
+        await pilot.pause()
+        assert not app.screen.allow_select
+        assert not app.screen.query_one("#board").allow_select
+        await pilot.triple_click("#stats", offset=(2, 0))
+        await pilot.triple_click("#board", offset=(1, 1))
+        await pilot.pause()
+        assert not app.screen.selections
+        app.route("settings")
+        await pilot.pause()
+        field = app.screen.query_one("#cfg-save-minutes")
+        field.focus()
+        await pilot.press("ctrl+shift+a", "5")
+        assert field.value == "5"

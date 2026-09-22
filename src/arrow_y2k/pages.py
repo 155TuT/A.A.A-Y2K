@@ -3,14 +3,15 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical, VerticalScroll, Center
 from textual.widgets import Button, Static, Input, Select, Switch
-from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton
+from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton, PixelSelect
 
 MODE_NAMES = {"easy": "简单", "medium": "中等", "hard": "困难", "endless": "无尽"}
 
 
 class Page(Screen):
-    """Every full page inherits the same button routing and toast area."""
+    """Minimal Textual adapter; screen contents are composed from widgets."""
     AUTO_FOCUS = ""
+    ALLOW_SELECT = False
     def header(self, title):
         return Static(title, classes="page-header")
 
@@ -26,6 +27,8 @@ class Page(Screen):
         self.app.dispatch(str(event.button.id))
 
     def on_mount(self):
+        for button in self.query(Button):
+            button.active_effect_duration = 0
         self.call_after_refresh(self.app.page_ready)
 
 
@@ -157,14 +160,14 @@ class SettingsPage(Page):
                 if section == "basic":
                     with Horizontal(classes="setting-row"):
                         yield Static("自动保存")
-                        yield Switch(cfg.autosave, id="cfg-autosave")
+                        yield Switch(cfg.autosave, animate=False, id="cfg-autosave")
                     yield Static("保存频率（分钟，1～60；游戏进行时计时）")
                     yield Input(str(cfg.save_minutes), type="integer", id="cfg-save-minutes")
                     yield Static("默认 3 分钟；退出当前游戏前也保存。\n关闭后不再覆写自动槽，四个手动槽仍可使用。", classes="mode-help")
                 elif section == "audio":
                     with Horizontal(classes="setting-row"):
                         yield Static("静音")
-                        yield Switch(cfg.muted, id="cfg-muted")
+                        yield Switch(cfg.muted, animate=False, id="cfg-muted")
                     yield Static("总音量 / 音效音量（0～100）")
                     with Horizontal(classes="button-row"):
                         yield Input(str(round(cfg.master_volume * 100)), type="integer", id="cfg-master")
@@ -173,11 +176,11 @@ class SettingsPage(Page):
                     yield Static("合成点击、碰撞、通关与成就音效。\n音频设备不可用时仍可正常游玩。", classes="mode-help")
                 elif section == "video":
                     yield Static("窗口分辨率")
-                    yield Select([(s, s) for s in ("1024x768","1280x720","1920x1080")],
+                    yield PixelSelect([(s, s) for s in ("1024x768","1280x720","1920x1080")],
                                  value=cfg.resolution, allow_blank=False, id="cfg-resolution")
                     with Horizontal(classes="setting-row"):
                         yield Static("减少震动与闪动")
-                        yield Switch(cfg.reduced_motion, id="cfg-motion")
+                        yield Switch(cfg.reduced_motion, animate=False, id="cfg-motion")
                     yield Static("保持整数像素缩放。减少震动仍保留碰撞变色\n和生命损失反馈；不改变判定规则。", classes="mode-help")
                 else:
                     from . import __version__
@@ -216,9 +219,9 @@ class EditorPage(Page):
             with Vertical(id="editor-side"):
                 options = [(f"{MODE_NAMES[p.difficulty]} / {p.name}", "preset:" + p.id) for p in app.presets]
                 options += [(f"自作 / {p.name}", "custom:" + p.id) for p in app.store.list_custom_maps()]
-                yield Select(options, value=app.editor_selection, allow_blank=False, id="map-catalog")
+                yield PixelSelect(options, value=app.editor_selection, allow_blank=False, id="map-catalog")
                 yield Input(app.editor_name, id="map-name", placeholder="地图名称")
-                yield Select([(MODE_NAMES[k], k) for k in ("easy","medium","hard")],
+                yield PixelSelect([(MODE_NAMES[k], k) for k in ("easy","medium","hard")],
                              value=app.editor_difficulty, allow_blank=False, id="map-difficulty")
                 yield Input(app.editor_seed, id="editor-seed", placeholder="生成种子")
                 yield Static("密度% / 长度上限 / 转弯%", classes="eyebrow")
