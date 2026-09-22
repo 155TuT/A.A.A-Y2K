@@ -98,6 +98,11 @@ class ArrowApp(App):
             return
         self._set_mouse_over(None, None)
         self.mouse_position = Offset(-1, -1)
+        # Textual 6.12 retains the previous down target even after MouseUp.
+        # A cancelled shell press must not complete that old click on return.
+        self._mouse_down_widget = None
+        self._click_chain_last_offset = self._click_chain_last_time = None
+        self._chained_clicks = 1
         self.capture_mouse(None)
         self.painting = 0
         self.hovered = self.editor_hover = None

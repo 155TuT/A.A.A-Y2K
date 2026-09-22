@@ -703,6 +703,25 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
                                                                  pos=(x + w // 2, y + h // 2)))
                             host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(10, 10)))
                             self.assertEqual(app.audio.master_volume, .65)
+                            # A cancelled physical M press cannot complete a
+                            # stale Textual MouseDown on the last TUI button.
+                            with patch.object(app, "apply_settings", wraps=app.apply_settings) as apply:
+                                await click_widget("#apply-settings")
+                                self.assertEqual(apply.call_count, 1)
+                                r = app.screen.query_one("#apply-settings").region
+                                target = host.shell.forward_point((r.x * 6 + r.width * 3, r.y * 12 + r.height * 6))
+                                x, y, w, h = host.shell.control_rects["menu"]
+                                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                                                     pos=(x + w // 2, y + h // 2)))
+                                host.process_event(pygame.event.Event(pygame.WINDOWLEAVE))
+                                host.process_event(pygame.event.Event(pygame.MOUSEMOTION, pos=target,
+                                                                     rel=(0, 0), buttons=(1, 0, 0)))
+                                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=target))
+                                await pilot.pause()
+                                self.assertEqual(apply.call_count, 1)
+                                self.assertFalse(app.store.settings.monochrome)
+                                await click_widget("#apply-settings")
+                                self.assertEqual(apply.call_count, 2)
                             await click_widget("#go-home")
                             self.assertEqual(app.page, "home")
                             escape()

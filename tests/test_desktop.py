@@ -361,3 +361,98 @@ def test_native_overlay_preserves_cjk_glyph_across_underlying_button_boundary(re
                         assert physical.getpixel((source[0] * preset.scale, source[1] * preset.scale)) == (0x72, 0xd6, 0x9c)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("handle,cancel_event", [
+    ("menu", "WINDOWLEAVE"), ("menu", "WINDOWFOCUSLOST"), ("frame", "WINDOWLEAVE"),
+])
+@pytest.mark.parametrize("batched", [False, True])
+async def test_cancelled_shell_press_never_repeats_previous_tui_click(tmp_path, monkeypatch, handle, cancel_event, batched):
+    from arrow_y2k.app import ArrowApp
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+    app = ArrowApp(data_dir=tmp_path, clock=lambda: 0.0)
+    app.audio.play = lambda _: True
+    host = PixelHost(app)
+    host._pygame = pygame
+    pygame.display.init()
+    try:
+        host._set_resolution("1280x720", notify=False)
+        async with app.run_test(size=(106, 30)) as pilot:
+            app.route("settings")
+            await pilot.pause()
+            actions = []
+            app.dispatch = actions.append
+            region = app.screen.query_one("#apply-settings").region
+            point = host.shell.forward_point((region.x * 6 + region.width * 3,
+                                              region.y * 12 + region.height * 6))
+            def mouse(kind, position, **extra):
+                host.process_event(pygame.event.Event(kind, pos=position, **extra))
+            def click():
+                mouse(pygame.MOUSEBUTTONDOWN, point, button=1)
+                mouse(pygame.MOUSEBUTTONUP, point, button=1)
+            click()
+            if not batched:
+                await pilot.pause()
+                assert actions == ["apply-settings"]
+            if handle == "menu":
+                x, y, width, height = host.shell.control_rects["menu"]
+                shell_point = (x + width // 2, y + height // 2)
+            else:
+                shell_point = (10, 10)
+            mouse(pygame.MOUSEBUTTONDOWN, shell_point, button=1)
+            assert host._pressed_control == "menu" if handle == "menu" else host._drag is not None
+            host.process_event(pygame.event.Event(getattr(pygame, cancel_event)))
+            assert host._pressed_control is None and host._drag is None
+            mouse(pygame.MOUSEMOTION, point, rel=(0, 0), buttons=(1, 0, 0))
+            mouse(pygame.MOUSEBUTTONUP, point, button=1)
+            await pilot.pause()
+            assert actions == ["apply-settings"]
+            assert not app.store.settings.monochrome
+            click()
+            await pilot.pause()
+            assert actions == ["apply-settings", "apply-settings"]
+            click()
+            click()
+            await pilot.pause()
+            assert actions == ["apply-settings"] * 4
+    finally:
+        pygame.display.quit()
+
+
+async def test_host_keeps_paired_right_erase_and_left_paint_events(tmp_path, monkeypatch):
+    from arrow_y2k.app import ArrowApp
+    from arrow_y2k.pixels import board_metrics
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+    app = ArrowApp(data_dir=tmp_path, clock=lambda: 0.0)
+    app.audio.play = lambda _: True
+    host = PixelHost(app)
+    host._pygame = pygame
+    pygame.display.init()
+    try:
+        host._set_resolution("1280x720", notify=False)
+        async with app.run_test(size=(106, 30)) as pilot:
+            app.route("editor")
+            await pilot.pause()
+            board = app.screen.query_one("#board")
+            region = board.content_region
+            geometry = board_metrics(region.width * 6, region.height * 12, board.mask)
+            cell = (1, 1)
+            app.editor_mask = {cell}
+            source = (region.x * 6 + geometry.origin_x + ((cell[0] - geometry.min_x) * 16 + 8) * geometry.scale,
+                      region.y * 12 + geometry.origin_y + ((cell[1] - geometry.min_y) * 16 + 8) * geometry.scale)
+            point = host.shell.forward_point(source)
+            for button in (3, 1):
+                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=point))
+                await pilot.pause()
+                assert app.painting == button
+                assert (cell in app.editor_mask) == (button == 1)
+                host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=point))
+                await pilot.pause()
+                assert app.painting == 0
+                assert not host._screen_mouse_buttons
+    finally:
+        pygame.display.quit()

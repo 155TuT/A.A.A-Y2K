@@ -213,6 +213,7 @@ class PixelHost:
         self.shell = None
         self._pressed_control = None
         self._pointer_in_screen = False
+        self._screen_mouse_buttons = set()
         self._shutdown_started = None
         self._last_content = None
         self.window_shape = None
@@ -292,6 +293,7 @@ class PixelHost:
         self._drag = None
         self._pressed_control = None
         self._pointer_in_screen = False
+        self._screen_mouse_buttons.clear()
         if self._geometry is not None:
             self.geometry.capture_pointer(False)
         callback = getattr(self.app, "reset_pointer_state", None)
@@ -466,9 +468,15 @@ class PixelHost:
             if event.type == pg.MOUSEBUTTONDOWN:
                 kind = {4: events.MouseScrollUp, 5: events.MouseScrollDown}.get(event.button, events.MouseDown)
                 button = event.button
+                if event.button not in (4, 5):
+                    self._screen_mouse_buttons.add(event.button)
             elif event.type == pg.MOUSEBUTTONUP:
-                if event.button in (4, 5):
+                # A cancelled shell/drag press has no matching TUI down.
+                # Gate here too: queued Textual down events may run only after
+                # an SDL batch has already reset its pointer state.
+                if event.button not in self._screen_mouse_buttons:
                     return
+                self._screen_mouse_buttons.remove(event.button)
                 kind, button = events.MouseUp, event.button
             else:
                 kind = events.MouseMove
