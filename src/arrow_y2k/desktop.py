@@ -22,6 +22,7 @@ from textual import events
 from textual.geometry import Region
 
 from .fonts import CELL_HEIGHT, CELL_WIDTH, draw_text
+from .windowing import DesktopGeometry, choose_work_area, place_window
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -190,6 +191,7 @@ class PixelHost:
         self._display = None
         self._window = None
         self._drag = None
+        self._geometry = None
         self._exit_requested = False
 
     def _request_exit(self) -> None:
@@ -211,22 +213,74 @@ class PixelHost:
         elif action == "open_url":
             webbrowser.open(PROJECT_URL, new=2)
         elif action == "minimize":
+            self._reset_pointer()
             self._pygame.display.iconify()
         elif action.startswith("resolution:"):
             self._set_resolution(action.split(":", 1)[1])
         else:
             raise ValueError(f"Unknown host action: {action}")
 
-    def _set_resolution(self, name: str) -> None:
+    @property
+    def geometry(self):
+        if self._geometry is None:
+            self._geometry = DesktopGeometry(self._pygame)
+        return self._geometry
+
+    def _set_resolution(self, name: str, *, notify: bool = True) -> None:
+        # Select the monitor using the OLD rectangle: a bigger new rectangle
+        # could overlap an adjacent display and unexpectedly move there.
+        previous = tuple(self._window.position) if self._window is not None else None
+        old_size = (self.resolution.width, self.resolution.height)
+        self._reset_pointer()
         self.resolution_name = name
         self.resolution = RESOLUTIONS[name]
-        self._display = self._pygame.display.set_mode(
-            (self.resolution.width, self.resolution.height), self._pygame.NOFRAME
-        )
-        from pygame._sdl2 import Window
+        size = (self.resolution.width, self.resolution.height)
+        self._display = self._pygame.display.set_mode(size, self._pygame.NOFRAME)
+        self._window = self._pygame.Window.from_display_module()
+        origin = previous if previous is not None else tuple(self._window.position)
+        area = choose_work_area(self.geometry.work_areas(), (*origin, *old_size))
+        self._window.position = place_window(size, area, previous)
+        if notify:
+            self.app.post_message(events.Resize.from_dimensions(self.resolution.terminal_size, self.resolution.logical_size))
 
-        self._window = Window.from_display_module()
-        self.app.post_message(events.Resize.from_dimensions(self.resolution.terminal_size, self.resolution.logical_size))
+    def _reset_pointer(self) -> None:
+        self._drag = None
+        if self._geometry is not None:
+            self.geometry.capture_pointer(False)
+        callback = getattr(self.app, "reset_pointer_state", None)
+        if callback is not None:
+            callback()
+
+    def _start_drag(self, event, point) -> bool:
+        region = getattr(self.app, "window_drag_region", None)
+        if region is None or self._window is None:
+            return False
+        x, y, width, height = region
+        if not (x <= point[0] < x + width and y <= point[1] < y + height):
+            return False
+        self._reset_pointer()
+        self._drag = (self.geometry.global_pointer(), tuple(self._window.position))
+        self.geometry.capture_pointer(True)
+        return True
+
+    def process_events(self, events_to_process) -> None:
+        """Collapse passive pointer motion, without dropping clicks or drawing.
+
+        Motion runs stop at every other event. Button/keyboard ordering and all
+        held-button strokes remain lossless, including the map editor's paint.
+        """
+        pending = None
+        pg = self._pygame
+        for event in events_to_process:
+            if event.type == pg.MOUSEMOTION and not any(event.buttons) and self._drag is None:
+                pending = event
+                continue
+            if pending is not None:
+                self.process_event(pending)
+                pending = None
+            self.process_event(event)
+        if pending is not None:
+            self.process_event(pending)
 
     def _key_message(self, event) -> events.Key | None:
         pg = self._pygame
@@ -281,27 +335,33 @@ class PixelHost:
         elif event.type == pg.TEXTINPUT:
             for character in event.text:
                 self.app.post_message(events.Key("space" if character == " " else character, character))
-        elif event.type == pg.WINDOWFOCUSLOST:
-            self.app.post_message(events.AppBlur())
-        elif event.type == pg.WINDOWFOCUSGAINED:
-            self.app.post_message(events.AppFocus())
+        elif event.type in (pg.WINDOWFOCUSLOST, pg.WINDOWLEAVE, pg.WINDOWMINIMIZED):
+            self._reset_pointer()
+            if event.type == pg.WINDOWFOCUSLOST:
+                self.app.post_message(events.AppBlur())
+        elif event.type in (pg.WINDOWFOCUSGAINED, pg.WINDOWRESTORED):
+            self._reset_pointer()
+            if event.type == pg.WINDOWFOCUSGAINED:
+                self.app.post_message(events.AppFocus())
         elif event.type in (pg.MOUSEBUTTONDOWN, pg.MOUSEBUTTONUP, pg.MOUSEMOTION):
             point = tuple(coordinate // self.resolution.scale for coordinate in event.pos)
             if (event.type == pg.MOUSEBUTTONDOWN and event.button == 1
-                    and getattr(self.app, "allow_window_drag", False)
-                    and point[0] < 150 and point[1] < 24):
-                self._drag = event.pos
+                    and self._start_drag(event, point)):
                 return
             if self._drag is not None:
                 if event.type == pg.MOUSEMOTION:
-                    old_mouse = self._drag
-                    current_window = self._window.position
-                    self._window.position = (
-                        current_window[0] + event.pos[0] - old_mouse[0],
-                        current_window[1] + event.pos[1] - old_mouse[1],
-                    )
-                elif event.type == pg.MOUSEBUTTONUP:
-                    self._drag = None
+                    pointer_origin, window_origin = self._drag
+                    pointer = self.geometry.global_pointer()
+                    if pointer_origin is not None and pointer is not None:
+                        self._window.position = (window_origin[0] + pointer[0] - pointer_origin[0],
+                                                 window_origin[1] + pointer[1] - pointer_origin[1])
+                    else:
+                        # Wayland/headless fallback uses movement deltas, never
+                        # stale window-local coordinates after moving a window.
+                        x, y = self._window.position
+                        self._window.position = (x + event.rel[0], y + event.rel[1])
+                elif event.type == pg.MOUSEBUTTONUP and event.button == 1:
+                    self._reset_pointer()
                 return
             mods = pg.key.get_mods()
             if event.type == pg.MOUSEBUTTONDOWN:
@@ -323,13 +383,11 @@ class PixelHost:
         # https://wiki.libsdl.org/SDL2/SDL_HINT_WINDOWS_DPI_AWARENESS
         os.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")
         import pygame
-        from pygame._sdl2 import Window
 
         self._pygame = pygame
         pygame.display.init()
         pygame.display.set_caption("一箭又一箭 / ARROW AFTER ARROW")
-        self._display = pygame.display.set_mode((self.resolution.width, self.resolution.height), pygame.NOFRAME)
-        self._window = Window.from_display_module()
+        self._set_resolution(self.resolution_name, notify=False)
         pygame.key.set_repeat(400, 35)
         pygame.key.start_text_input()
         self.app.host_action = self.handle_action
@@ -349,8 +407,7 @@ class PixelHost:
                 await asyncio.sleep(0.01)
             while self.running and not task.done():
                 frame_start = monotonic()
-                for event in pygame.event.get():
-                    self.process_event(event)
+                self.process_events(pygame.event.get())
                 await asyncio.sleep(0)
                 # ExitApp may empty the screen stack during this yield. The
                 # immediate _exit flag is part of the pinned Textual adapter.

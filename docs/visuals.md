@@ -40,6 +40,17 @@ selection is disabled so rapid double/triple clicks cannot highlight the
 board's surrounding text; Input editing remains available.
 
 The SDL host forwards close, Alt+F4 and the close capability to
-`app.request_desktop_exit()` so the app can save first. Window dragging is
-allowed only when `app.allow_window_drag` is true; it never consumes gameplay
-board clicks. The `open_url` capability opens only the verified project page.
+`app.request_desktop_exit()` so the app can save first. `window_drag_region`
+reserves the top 12 source pixels across every page, including the gameplay
+page's existing margin. No board space is removed and no board clicks are
+consumed. The host captures the desktop pointer for stable dragging, falling
+back to relative motion where global coordinates are unavailable.
+
+`windowing.py` reads SDL's monitor work areas, including taskbar/Dock exclusions
+and negative multi-monitor origins. Startup and resolution changes keep the
+window in the current usable area; an oversized preset anchors its top-left
+corner there while preserving the requested integer pixel size. Minimizing,
+restoring, losing focus or changing pages clears stale pointer and press
+states. Passive motion events may be coalesced without dropping click events
+or held-button drawing. The `open_url` capability opens only the verified
+project page.

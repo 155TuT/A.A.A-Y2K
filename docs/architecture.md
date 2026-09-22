@@ -20,11 +20,12 @@
 | `pages.py` | 各页面组件的组合和布局 |
 | `app.py` | 组合服务、路由、60 Hz 时钟、保存调度及动画协调 |
 | `fonts.py` | 官方字体加载、二值字形栅格、字符宽度规则 |
-| `desktop.py` | 无边框窗口、分辨率、系统事件转发与 Textual 帧呈现 |
+| `windowing.py` | SDL 显示器可用区域、窗口定位和全局鼠标捕获 |
+| `desktop.py` | 组合窗口能力、分辨率、系统事件转发与 Textual 帧呈现 |
 | `__main__.py` | 源码和打包程序共用入口，无控制台进程的日志流适配 |
 | `selftest.py` | 源码和冻结程序共用的行为验证套件 |
 
-组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button`/`Select` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
+组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App，并组合 `DesktopGeometry`。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button`/`Select` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
 
 游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。
 
@@ -40,9 +41,13 @@
 
 ## 控件状态与原生窗口
 
-`Page` 禁止框架自动聚焦首个按钮，并关闭屏幕级文本选择；`RasterView` 自身也不可选中文字。输入框仍使用 Textual 的文本编辑行为。Button 关闭默认 0.2 秒 active gate，连续操作不被按压动画吞掉。选中设置标签、键盘焦点和鼠标 hover 使用不同样式；应用切页时统一清理旧指针捕获、焦点及按压状态。
+`Page` 禁止框架自动聚焦首个按钮，并关闭屏幕级文本选择；`RasterView` 自身也不可选中文字。输入框仍使用 Textual 的文本编辑行为。Button 关闭默认 0.2 秒 active gate，连续操作不被按压动画吞掉。选中设置标签、键盘焦点和鼠标 hover 使用不同样式；应用切页、宿主最小化/恢复和失焦时统一清理旧指针捕获、焦点及按压状态。
 
 `PixelButton` 保留 Textual Button 的事件和标签，仅组合图标绘制内容；`PixelSelect` 保留原生 Select 的键盘和弹层行为，给既有展开指示组件组合一个圆点渲染器。没有另写一套控件命中或导航规则。
+
+`ArrowApp.window_drag_region` 显式保留每页顶部 12 源像素整行，游戏页利用已有空白边距，因此不会压缩棋盘或截获格子点击。`PixelHost` 在该区域捕获鼠标，用桌面坐标与窗口起点计算拖动；不支持全局鼠标坐标的后端使用移动增量。无按键的连续移动事件可合并，所有按键、点击和按住绘制事件保持原顺序。
+
+`windowing.place_window` 使用当前显示器可用区域（含任务栏/Dock 留白），启动时居中，改变分辨率时尽量保留原位置再约束到可见范围。显示器选择使用调整前窗口的交叠面积，避免放大后误跳到相邻显示器；负坐标合法。窗口比可用区域更大时锚定该区域左上角，保持整数像素尺寸并确保顶部仍可拖动。
 
 ## 生成器为什么终止、有解
 

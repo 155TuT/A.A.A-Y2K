@@ -152,28 +152,145 @@ def test_native_exit_variants_call_save_boundary_once(monkeypatch):
         assert not host.running
 
 
-def test_header_drag_is_disabled_for_gameplay_and_opt_in_elsewhere(monkeypatch):
+def test_header_drag_uses_full_width_and_global_pointer_without_stealing_board(monkeypatch):
+    from types import SimpleNamespace
+    from arrow_y2k.windowing import WorkArea
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     import pygame
 
     app = BridgeApp()
-    messages = []
+    messages, captures, resets = [], [], []
+    app.post_message = messages.append
+    app.reset_pointer_state = lambda: resets.append(True)
+    app.window_drag_region = (0, 0, 640, 12)
+    host = PixelHost(app)
+    host._pygame = pygame
+    # Global x is negative on a monitor to the left of the primary display.
+    pointer = [-820, 110]
+    host._geometry = SimpleNamespace(
+        global_pointer=lambda: tuple(pointer),
+        capture_pointer=captures.append,
+        work_areas=lambda: [WorkArea(-1920, 0, 1920, 1040)],
+    )
+    host._window = SimpleNamespace(position=(-1800, 100))
+    pygame.display.init()
+    try:
+        # Right end of the header works; the previous 150-source-pixel limit
+        # made most of the title strip unusable.
+        host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(980, 10)))
+        assert host._drag is not None
+        assert not messages
+        pointer[:] = [-720, 145]
+        host.process_event(pygame.event.Event(pygame.MOUSEMOTION, pos=(1080, 45), rel=(100, 35), buttons=(1, 0, 0)))
+        assert host._window.position == (-1700, 135)
+        # SDL local coordinates change as the window moves. Using this stale
+        # local position would move the window back, causing visible jitter.
+        host.process_event(pygame.event.Event(pygame.MOUSEMOTION, pos=(980, 10), rel=(0, 0), buttons=(1, 0, 0)))
+        assert host._window.position == (-1700, 135)
+        pointer[:] = [-650, 175]
+        host.process_event(pygame.event.Event(pygame.MOUSEMOTION, pos=(1050, 40), rel=(70, 30), buttons=(1, 0, 0)))
+        assert host._window.position == (-1630, 165)
+        host.process_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(980, 10)))
+        assert host._drag is None and captures[-1] is False
+        # The game/editor begin below the first logical row; those clicks are
+        # ordinary lossless Textual messages, regardless of page name.
+        host.process_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(980, 24)))
+        assert isinstance(messages[-1], events.MouseDown)
+        assert host._drag is None
+    finally:
+        pygame.display.quit()
+
+
+def test_native_mouse_resets_on_leave_blur_minimize_and_restore(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+    app = BridgeApp()
+    resets, messages = [], []
+    app.reset_pointer_state = lambda: resets.append(True)
     app.post_message = messages.append
     host = PixelHost(app)
     host._pygame = pygame
     pygame.display.init()
+    pygame.display.set_mode((320, 240))
     try:
-        event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(80, 16))
-        app.allow_window_drag = False
-        host.process_event(event)
-        assert host._drag is None
-        assert isinstance(messages[-1], events.MouseDown)
-        messages.clear()
-        app.allow_window_drag = True
-        host.process_event(event)
-        assert host._drag == (80, 16)
-        assert not messages
+        for kind in (pygame.WINDOWLEAVE, pygame.WINDOWFOCUSLOST,
+                     pygame.WINDOWMINIMIZED, pygame.WINDOWRESTORED, pygame.WINDOWFOCUSGAINED):
+            host._drag = ((0, 0), (0, 0))
+            host.process_event(pygame.event.Event(kind))
+            assert host._drag is None
+        host.handle_action("minimize")
+        assert len(resets) == 6
+        assert [type(message) for message in messages] == [events.AppBlur, events.AppFocus]
+    finally:
+        pygame.display.quit()
+
+
+def test_motion_coalescing_preserves_click_order_and_every_painted_cell(monkeypatch):
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+    host = PixelHost(BridgeApp())
+    host._pygame = pygame
+    delivered = []
+    host.process_event = delivered.append
+    motion = lambda x, held=False: pygame.event.Event(
+        pygame.MOUSEMOTION, pos=(x, 80), rel=(1, 0), buttons=(int(held), 0, 0))
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(10, 80))
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(14, 80))
+    batch = [*[motion(x) for x in range(10)], down,
+             *[motion(x, True) for x in range(10, 15)], up,
+             *[motion(x) for x in range(15, 20)]]
+    host.process_events(batch)
+    assert delivered == [batch[9], down, *batch[11:16], up, batch[-1]]
+    assert sum(event.type == pygame.MOUSEBUTTONDOWN for event in delivered) == 1
+    assert sum(event.type == pygame.MOUSEBUTTONUP for event in delivered) == 1
+
+
+def test_window_placement_keeps_integer_size_and_handles_negative_monitors():
+    from arrow_y2k.windowing import WorkArea, choose_work_area, place_window
+    main = WorkArea(0, 0, 2560, 1400)
+    left = WorkArea(-1920, -200, 1920, 1040)
+    assert choose_work_area([main, left], (-1700, 0, 1280, 720)) == left
+    assert place_window((1920, 1080), main, (640, 500)) == (640, 320)
+    assert place_window((1920, 1080), left, (-1700, 0)) == (-1920, -200)
+    assert place_window((1280, 720), left) == (-1600, -40)
+    assert place_window((1280, 720), main, (9999, 9999)) == (1280, 680)
+    assert choose_work_area([main, left], (-4000, -300, 300, 200)) == left
+
+
+def test_sdl_actual_resize_repositions_into_selected_work_area(monkeypatch):
+    from types import SimpleNamespace
+    from arrow_y2k.windowing import DesktopGeometry, WorkArea
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+    app = BridgeApp()
+    app.post_message = lambda message: None
+    host = PixelHost(app)
+    host._pygame = pygame
+    pygame.display.init()
+    try:
+        # Exercise the real shipped SDL ctypes adapter as well as the pure
+        # geometry helper. Dummy has one usable display but no global pointer.
+        geometry = DesktopGeometry(pygame)
+        assert geometry.sdl is not None
+        assert geometry.work_areas()
+        assert geometry.global_pointer() is None
+        host._geometry = SimpleNamespace(
+            work_areas=lambda: [WorkArea(-1920, 0, 1920, 1040), WorkArea(0, 0, 2560, 1400)],
+            capture_pointer=lambda enabled: None,
+        )
+        host._set_resolution("1280x720")
+        host._window.position = (640, 500)
+        host._set_resolution("1920x1080")
+        assert tuple(host._window.position) == (640, 320)
+        assert pygame.display.get_window_size() == (1920, 1080)
+        host._set_resolution("1280x720")
+        host._window.position = (-1700, 200)
+        host._set_resolution("1920x1080")
+        assert tuple(host._window.position) == (-1920, 0)
+        assert pygame.display.get_window_size() == (1920, 1080)
     finally:
         pygame.display.quit()
 

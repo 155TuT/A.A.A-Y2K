@@ -268,6 +268,21 @@ class AchievementsContract(IsolatedStoreCase):
 
 
 class FontContract(unittest.TestCase):
+    def test_pixel_icons_and_monitor_placement(self):
+        from .icons import pixel_icon
+        from .windowing import WorkArea, choose_work_area, place_window
+        for name in ("play", "folder", "trophy", "map", "gear", "exit", "github", "heart"):
+            with self.subTest(icon=name):
+                icon = pixel_icon(name)
+                self.assertEqual(icon.mode, "RGBA")
+                self.assertIsNotNone(icon.getbbox())
+        primary = WorkArea(0, 0, 2560, 1392)
+        secondary = WorkArea(-2560, -155, 2560, 1528)
+        self.assertEqual(choose_work_area([primary, secondary], (-2000, 200, 1280, 720)), secondary)
+        self.assertEqual(place_window((1920, 1080), primary, (1600, 900)), (640, 312))
+        self.assertEqual(place_window((1920, 1080), secondary, (-1200, 900)), (-1920, 293))
+        self.assertEqual(place_window((1920, 1080), WorkArea(0, 0, 1280, 680)), (0, 0))
+
     def test_bundled_font_is_monospaced_binary_pixel_data(self):
         from .fonts import glyph_mask, pixel_font
         self.assertEqual(pixel_font().getlength("A"), 6)

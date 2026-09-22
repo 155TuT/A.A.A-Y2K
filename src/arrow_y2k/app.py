@@ -88,8 +88,9 @@ class ArrowApp(App):
         return self.page == "editor"
 
     @property
-    def allow_window_drag(self):
-        return self.page not in ("game", "editor")
+    def window_drag_region(self):
+        # Headers and the game's top margin reserve this whole source-pixel row.
+        return (0, 0, self.size.width * 6, 12)
 
     def reset_pointer_state(self):
         if not self.screen_stack:
