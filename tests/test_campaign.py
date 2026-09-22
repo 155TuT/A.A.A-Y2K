@@ -25,8 +25,10 @@ def test_catalog_connected_and_sized():
     assert len({m.id for m in maps}) == 15
     for item in maps:
         assert all(0 <= x < 20 and 0 <= y < 16 for x, y in item.mask)
-        if item.difficulty == "medium": assert 80 <= len(item.mask) <= 150
-        if item.difficulty == "hard": assert 150 <= len(item.mask) <= 250
+        if item.difficulty == "medium":
+            assert 80 <= len(item.mask) <= 150
+        if item.difficulty == "hard":
+            assert 150 <= len(item.mask) <= 250
         remaining = set(item.mask)
         frontier = [remaining.pop()]
         while frontier:
@@ -74,7 +76,8 @@ def test_tutorial_seed_randomness_and_shapes():
         assert first.session.board != GameRun._level("easy","beta",index,True).session.board
         assert (first.session.board.width,first.session.board.height) == shape
         assert all(a.id.startswith("a") for a in first.session.board.arrows)
-        if index == 1: assert all(len(a.cells) <= 2 for a in first.session.board.arrows)
+        if index == 1:
+            assert all(len(a.cells) <= 2 for a in first.session.board.arrows)
 
 def test_timeout_restart_and_invalid_ticks():
     run = GameRun.new("medium","timer")
@@ -91,7 +94,8 @@ def test_timeout_restart_and_invalid_ticks():
     assert (run.seconds_left,run.elapsed_seconds,run.combo,run.best_combo) == (240,0,0,0)
     assert run.outcome == "playing" and not run.failure_reason
     for value in (-1,math.inf,math.nan,"1"):
-        with pytest.raises(ValueError): run.tick(value)
+        with pytest.raises(ValueError):
+            run.tick(value)
     easy = GameRun.new("easy","clock")
     easy.tick(1234.5)
     assert easy.seconds_left is None and easy.elapsed_seconds == 1234.5
@@ -184,7 +188,8 @@ def test_restore_does_not_regenerate(monkeypatch):
 def test_invalid_snapshots_fail_with_value_error(mutation):
     data = deepcopy(GameRun.new("medium","validation").to_dict())
     mutation(data)
-    with pytest.raises(ValueError): GameRun.from_dict(data)
+    with pytest.raises(ValueError):
+        GameRun.from_dict(data)
 
 
 def collision_run(mode, *, lives=3, seconds=None):

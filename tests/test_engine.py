@@ -230,6 +230,9 @@ def test_map_loader_rejects_non_integer_coordinates_without_coercion(tmp_path, c
 @pytest.mark.parametrize("kwargs", [
     {"density": 0}, {"density": 1.1}, {"max_length": 0},
     {"min_length": 8, "max_length": 7}, {"turn_bias": -0.1}, {"turn_bias": 1.1},
+    {"seed": []}, {"density": True}, {"turn_bias": False},
+    {"density": 10**400}, {"density": float("nan")},
+    {"max_length": 2.5}, {"min_length": True}, {"max_length": "7"},
 ])
 def test_generator_config_rejects_invalid_values(kwargs):
     with pytest.raises(ValueError):

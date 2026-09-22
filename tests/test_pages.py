@@ -8,7 +8,7 @@ import json
 
 import pytest
 from textual import events
-from textual.widgets import Button, Input, Select, Static, Switch
+from textual.widgets import Button, Input, Select, Static
 
 from arrow_y2k.app import ArrowApp
 from arrow_y2k.campaign import GameRun

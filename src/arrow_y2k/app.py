@@ -8,10 +8,12 @@ from dataclasses import replace
 from pathlib import Path
 from textual.app import App
 from textual.binding import Binding
-from textual.geometry import Offset
 from textual import on
 from textual.widgets import Button, Input, Select, Static, Switch
 
+from . import PROJECT_URL
+from .display_config import DisplayPreferences
+from .textual_bridge import reset_pointer_state
 from .campaign import GameRun
 from .catalog import preset_maps
 from .generation import GenerateConfig
@@ -87,6 +89,11 @@ class ArrowApp(App):
         return self.page == "editor"
 
     @property
+    def display_preferences(self):
+        settings = self.store.settings
+        return DisplayPreferences(settings.reduced_motion, settings.monochrome)
+
+    @property
     def window_drag_region(self):
         # The host excludes interactive controls inside a draggable header.
         headers = self.screen.query(".page-header") if self.screen_stack else None
@@ -94,23 +101,9 @@ class ArrowApp(App):
         return (0, 0, self.size.width * 6, height)
 
     def reset_pointer_state(self):
-        if not self.screen_stack:
-            return
-        self._set_mouse_over(None, None)
-        self.mouse_position = Offset(-1, -1)
-        # Textual 6.12 retains the previous down target even after MouseUp.
-        # A cancelled shell press must not complete that old click on return.
-        self._mouse_down_widget = None
-        self._click_chain_last_offset = self._click_chain_last_time = None
-        self._chained_clicks = 1
-        self.capture_mouse(None)
+        reset_pointer_state(self)
         self.painting = 0
         self.hovered = self.editor_hover = None
-        self.screen.clear_selection()
-        for widget in self.screen.query("Button, Switch"):
-            widget.remove_class("-active")
-        if isinstance(self.focused, (Button, Switch)):
-            self.screen.set_focus(None)
 
     def on_mount(self):
         self.push_screen(PAGES["home"]())
@@ -122,11 +115,11 @@ class ArrowApp(App):
         self._page_ready = True
         self.refresh_labels()
 
-    def route(self, page):
+    def route(self, page, *, capture_form=True):
         if self._desktop_closing:
             return
         self.consume_game_time()
-        if self.page == "editor":
+        if self.page == "editor" and capture_form:
             self.capture_editor()
         self.reset_pointer_state()
         self._label_values.clear()
@@ -230,12 +223,19 @@ class ArrowApp(App):
         if mode not in self.store.profile.unlocked_modes:
             self.show_toast("模式尚未解锁")
             return
+        self.consume_game_time(save_due=False)
         self.auto_save()
         seed = self.seed if self.seed is not None else secrets.token_hex(8)
         self.game = GameRun.new(mode, seed, tutorial=not self.store.profile.tutorial_completed)
+        self.enter_game(self.game.description)
+
+    def enter_game(self, message, *, save_initial=True):
+        """Start a fresh presentation/clock boundary for a new or restored board."""
+        self._page_ready = False
         self.reset_visuals()
-        self.auto_save()
-        self.message = self.game.description
+        if save_initial:
+            self.auto_save()
+        self.message = message
         self.route("game")
 
     def click_cell(self, cell):
@@ -294,7 +294,7 @@ class ArrowApp(App):
     def tick(self):
         if self._desktop_closing or not self.is_mounted or not self.screen_stack:
             return
-        dt = self.consume_game_time()
+        self.consume_game_time()
         if self.toast_text or self.toast_queue:
             self.advance_toast()
         if self.page != "game" or not self.game or not self._page_ready:
@@ -326,11 +326,7 @@ class ArrowApp(App):
         self.auto_save()
         if game.mode == "endless" and game.outcome == "level_won":
             game.advance()
-            self.reset_visuals()
-            self.auto_save()
-            self.message = game.description
-            self.last_tick = self.clock()
-            self.route("game")
+            self.enter_game(game.description)
         else:
             self.route("result")
 
@@ -410,13 +406,12 @@ class ArrowApp(App):
     def action_restart(self):
         if self._desktop_closing or self.page not in ("game", "result") or not self.game:
             return
-        if not self.game.custom and self.game.outcome == "playing" and not self.game.assisted:
+        self.consume_game_time(save_due=False)
+        if (not self.game.custom and not self.game.counted
+                and self.game.outcome in ("playing", "lost") and not self.game.assisted):
             self.awards(self.achievements.record_loss())
         self.game.restart()
-        self.reset_visuals()
-        self.auto_save()
-        self.message = "重新开始。"
-        self.route("game")
+        self.enter_game("重新开始。")
 
     def _save_device_settings(self, settings):
         try:
@@ -492,13 +487,15 @@ class ArrowApp(App):
         self.set_text("#settings-status", "设置已保存。")
 
     def load_editor(self, selection):
-        self.editor_selection = selection
         kind, identifier = selection.split(":", 1)
+        items = self.presets if kind == "preset" else self.store.list_custom_maps()
+        item = next((item for item in items if item.id == identifier), None)
+        if item is None:
+            raise DomainStorageError("所选地图已不存在，请重新选择。")
+        self.editor_selection = selection
         if kind == "preset":
-            item = next(p for p in self.presets if p.id == identifier)
             self.editor_name = item.name + " / 我的版本"
         else:
-            item = next(p for p in self.store.list_custom_maps() if p.id == identifier)
             self.editor_name = item.name
             self.editor_seed = item.config.seed
             self.editor_density = round(item.config.density * 100)
@@ -549,14 +546,12 @@ class ArrowApp(App):
                 raise ValueError("预设地图不能删除。")
             self.store.delete_custom_map(identifier)
             self.load_editor("preset:" + self.presets[0].id)
-            self.page = "home"  # Do not recapture the deleted editor fields.
-            self.route("editor")
+            self.route("editor", capture_form=False)
             return
         elif key == "editor-import":
             item = self.store.import_custom_map(Path(self.editor_path).expanduser())
             self.load_editor("custom:" + item.id)
-            self.page = "home"
-            self.route("editor")
+            self.route("editor", capture_form=False)
             return
         elif key in ("editor-save", "editor-export"):
             item = self.store.save_custom_map(self.editor_name, frozenset(self.editor_mask),
@@ -565,27 +560,26 @@ class ArrowApp(App):
             self.awards(self.achievements.record_editor())
             if key == "editor-export":
                 self.store.export_custom_map(item.id, Path(self.editor_path).expanduser())
-            self.page = "home"
-            self.route("editor")
+            self.route("editor", capture_form=False)
             self.show_toast("地图已导出" if key == "editor-export" else "地图已保存", item.name)
             return
         elif key == "editor-play":
             self.auto_save()
             self.game = GameRun.from_custom(frozenset(self.editor_mask), self.editor_config(), self.editor_difficulty)
             self.game.name = self.editor_name
-            self.reset_visuals()
-            self.auto_save()
-            self.message = self.game.description
-            self.route("game")
+            self.enter_game(self.game.description)
             return
         self.refresh_labels()
 
     @on(Select.Changed, "#map-catalog")
     def select_map(self, event):
         if not self._desktop_closing and self.page == "editor" and isinstance(event.value, str) and event.value != self.editor_selection:
-            self.load_editor(event.value)
-            self.page = "home"
-            self.route("editor")
+            try:
+                self.load_editor(event.value)
+            except DomainStorageError as error:
+                self.show_toast("操作未完成", str(error))
+            else:
+                self.route("editor", capture_form=False)
 
     def dispatch(self, key):
         if self._desktop_closing:
@@ -626,11 +620,10 @@ class ArrowApp(App):
                     # Read first: saving the outgoing game may overwrite slot 0.
                     self.auto_save()
                     self.game = loaded
-                    self.reset_visuals()
-                    self.message = "已恢复保存的局面。"
                     if loaded.outcome == "playing":
-                        self.route("game")
+                        self.enter_game("已恢复保存的局面。", save_initial=False)
                     else:
+                        self.reset_visuals()
                         self.process_result()
             elif key.startswith("save-slot-"):
                 self.store.save_slot(int(key.rsplit("-", 1)[1]), self.game)
@@ -641,10 +634,7 @@ class ArrowApp(App):
                 self.route("saves")
             elif key == "next-level" and self.game:
                 if self.game.advance():
-                    self.reset_visuals()
-                    self.auto_save()
-                    self.message = self.game.description
-                    self.route("game")
+                    self.enter_game(self.game.description)
             elif key in ("hint", "solve", "restart"):
                 getattr(self, "action_" + key)()
             elif key.startswith("editor-"):
@@ -656,7 +646,7 @@ class ArrowApp(App):
                     self.host_action("minimize" if key == "minimize" else "open_url")
                 elif key == "github":
                     import webbrowser
-                    webbrowser.open("https://github.com/155TuT/arrow-Y2K")
+                    webbrowser.open(PROJECT_URL)
         except (DomainStorageError, ValueError, OSError) as error:
             text = str(error).replace("[", "\\[")
             self.show_toast("操作未完成", text)

@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -21,6 +20,8 @@ from platformdirs import user_data_dir
 from .generation import GenerateConfig
 from .canvas import validate_canvas
 from .model import Board, Cell
+from .display_config import RESOLUTIONS
+from .validation import is_finite_number
 
 if TYPE_CHECKING:
     from .campaign import GameRun
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 DIFFICULTIES = frozenset(("easy", "medium", "hard"))
 MODES = DIFFICULTIES | {"endless"}
-RESOLUTIONS = frozenset(("1024x768", "1280x720", "1920x1080"))
 
 
 def user_data_root() -> Path:
@@ -59,9 +59,9 @@ class Settings:
             raise DomainStorageError("自动保存间隔须为 1–60 分钟。")
         for name in ("master_volume", "effects_volume"):
             value = getattr(self, name)
-            if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
+            if not is_finite_number(value) or not 0 <= value <= 1:
                 raise DomainStorageError("音量须在 0 到 1 之间。")
-        if self.resolution not in RESOLUTIONS:
+        if not isinstance(self.resolution, str) or self.resolution not in RESOLUTIONS:
             raise DomainStorageError("不支持该窗口分辨率。")
 
 
@@ -110,7 +110,7 @@ class Profile:
                 raise DomainStorageError("玩家记录中的开关格式不正确。")
             setattr(result, key, value)
         value = data.get("endless_best_seconds")
-        if value is not None and (type(value) not in (float, int) or not math.isfinite(value) or value <= 0):
+        if value is not None and (not is_finite_number(value) or value <= 0):
             raise DomainStorageError("无尽模式纪录必须为有效的正数秒数。")
         result.endless_best_seconds = value
         return result
@@ -201,15 +201,8 @@ def _parse_map(data: dict) -> CustomMap:
         validate_canvas(mask)
         Board(mask)
         raw_config = data["config"]
-        if not isinstance(raw_config, dict) or not isinstance(raw_config.get("seed", "2026"), str):
-            raise DomainStorageError("生成参数必须为对象，种子必须为文本。")
-        for key, default in (("min_length", 1), ("max_length", 7)):
-            if type(raw_config.get(key, default)) is not int:
-                raise DomainStorageError("箭头长度必须为整数。")
-        for key, default in (("density", 0.75), ("turn_bias", 0.6)):
-            value = raw_config.get(key, default)
-            if type(value) not in (int, float) or not math.isfinite(value):
-                raise DomainStorageError("密度与转弯偏好必须为有限数值。")
+        if not isinstance(raw_config, dict):
+            raise DomainStorageError("生成参数必须为对象。")
         config = GenerateConfig(**raw_config)
         return CustomMap(data["id"], name.strip(), difficulty, mask, config)
     except DomainStorageError:

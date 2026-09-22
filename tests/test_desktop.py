@@ -46,6 +46,29 @@ class BridgeApp(App):
         self.presses += 1
 
 
+@pytest.mark.parametrize("stage", ["window", "application"])
+async def test_native_resources_close_when_startup_or_application_fails(monkeypatch, stage):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import pygame
+
+    app = BridgeApp()
+    host = PixelHost(app)
+    if stage == "window":
+        def fail_window(*args, **kwargs):
+            raise RuntimeError("window startup failed")
+        monkeypatch.setattr(host, "_set_resolution", fail_window)
+    else:
+        async def fail_app(*args, **kwargs):
+            raise RuntimeError("application failed")
+        monkeypatch.setattr(app, "run_async", fail_app)
+    with pytest.raises(RuntimeError, match="failed"):
+        await host.run()
+    assert not pygame.display.get_init()
+    assert not host.running
+    assert app.host_action is None
+
+
 def test_bundled_font_matches_terminal_and_has_binary_coverage():
     font = pixel_font()
     assert font.getlength("A") == 6
@@ -234,8 +257,9 @@ def test_motion_coalescing_preserves_click_order_and_every_painted_cell(monkeypa
     host._pygame = pygame
     delivered = []
     host.process_event = delivered.append
-    motion = lambda x, held=False: pygame.event.Event(
-        pygame.MOUSEMOTION, pos=(x, 80), rel=(1, 0), buttons=(int(held), 0, 0))
+    def motion(x, held=False):
+        return pygame.event.Event(
+            pygame.MOUSEMOTION, pos=(x, 80), rel=(1, 0), buttons=(int(held), 0, 0))
     down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(10, 80))
     up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(14, 80))
     batch = [*[motion(x) for x in range(10)], down,

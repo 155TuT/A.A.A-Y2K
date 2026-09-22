@@ -15,7 +15,16 @@ python run.py --seed my-seed
 
 建议先用 `python -m venv .venv` 创建虚拟环境。Windows PowerShell 用 `.venv\Scripts\Activate.ps1` 激活，macOS/Linux 用 `source .venv/bin/activate`；随后使用相同的 `python` 命令。Windows 的 `setup.ps1` 可作为安装辅助，游戏统一通过 `run.py` 或打包产物启动。`--data-dir PATH` 可指定独立数据目录，适合测试或便携部署。
 
-打包版无需 Python：解压完整 ZIP 后运行 `A.A.A-Y2K.exe`，保留旁边的 `_internal` 目录。构建与同源测试见 [打包说明](docs/build.md)。
+安装版无需 Python，从 [GitHub Releases](https://github.com/155TuT/A.A.A-Y2K/releases/latest) 下载对应平台：
+
+| 平台 | 下载与安装 |
+| --- | --- |
+| Windows x64 | `windows-x64-Setup.exe`：安装向导，支持快捷方式、覆盖安装和卸载 |
+| macOS Apple Silicon | `macos-arm64.pkg` 安装向导，或 `.dmg` 拖入 Applications |
+| macOS Intel | `macos-x64.pkg` 安装向导，或 `.dmg` 拖入 Applications |
+| Linux x64 | `linux-x64-portable.zip`：完整解压后运行其中的 `A.A.A-Y2K` |
+
+Windows 的 Setup EXE 是安装程序；游戏运行文件与依赖由安装器一起部署。用户数据独立于安装目录，卸载 Windows 应用保留存档。0.4.0 的 Windows 包未做 Authenticode 签名，macOS 应用仅有 ad-hoc 签名、未做 Apple 公证。构建、系统提示和验证边界见 [打包说明](docs/build.md)。
 
 ## 页面与操作
 

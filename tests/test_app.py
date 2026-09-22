@@ -52,6 +52,47 @@ async def finish(app, pilot, clock):
     await step(app, pilot, clock, app.effects.remaining_seconds + 0.01)
 
 
+@pytest.mark.parametrize("operation", ["restart", "new"])
+async def test_replacing_run_does_not_charge_pending_old_time_to_new_board(tmp_path, operation):
+    clock = Clock()
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        await install(app, pilot, "medium")
+        clock.advance(17.5)  # Intentionally do not let the old run's timer tick.
+        if operation == "restart":
+            app.action_restart()
+        else:
+            app.start_game("medium")
+        await pilot.pause()
+        assert app.game.seconds_left == 240
+        assert app.game.elapsed_seconds == 0
+        assert app.store.load_slot(0).to_dict() == app.game.to_dict()
+
+
+async def test_editor_reload_uses_selected_state_without_faking_current_page(tmp_path):
+    app = ArrowApp(data_dir=tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.route("editor")
+        await pilot.pause()
+        app.q("#map-name", Input).value = "unsaved old form"
+        target = app.presets[1]
+        app.load_editor("preset:" + target.id)
+        app.route("editor", capture_form=False)
+        await pilot.pause()
+        assert app.page == "editor"
+        assert app.editor_mask == set(target.mask)
+        assert app.q("#map-name", Input).value == target.name + " / 我的版本"
+
+
+def test_missing_editor_selection_preserves_current_state(tmp_path):
+    from arrow_y2k.storage import DomainStorageError
+    app = ArrowApp(data_dir=tmp_path)
+    before = (app.editor_selection, app.editor_name, app.editor_mask.copy())
+    with pytest.raises(DomainStorageError):
+        app.load_editor("custom:" + "a" * 32)
+    assert (app.editor_selection, app.editor_name, app.editor_mask) == before
+
+
 @pytest.mark.parametrize("failure", ["timeout", "lives"])
 async def test_failure_routes_to_result_and_resets_official_streak(tmp_path, failure):
     clock = Clock()

@@ -4,6 +4,9 @@ import asyncio
 import sys
 from pathlib import Path
 
+from . import __version__
+from .display_config import RESOLUTIONS
+
 
 def prepare_windowed_streams(data_dir: Path | None = None):
     """Supply missing GUI-process streams without replacing an existing console.
@@ -26,7 +29,8 @@ def prepare_windowed_streams(data_dir: Path | None = None):
 
 def main():
     parser = argparse.ArgumentParser(description="ARROW.AFTER.ARROW-Y2K")
-    parser.add_argument("--resolution", choices=("1024x768", "1280x720", "1920x1080"))
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--resolution", choices=tuple(RESOLUTIONS))
     parser.add_argument("--seed", help="固定新游戏种子；默认每次新建使用新种子")
     parser.add_argument("--data-dir", type=Path, help="独立用户数据目录（测试或便携使用）")
     parser.add_argument("--screenshot", help="保存原生窗口显示帧")

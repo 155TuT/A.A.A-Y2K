@@ -119,6 +119,21 @@ def test_profile_rejects_invalid_counters():
             Profile.from_dict(data)
 
 
+@pytest.mark.parametrize("payload", [
+    {"settings": {"master_volume": 10**400}},
+    {"settings": {"resolution": []}},
+    {"profile": {"endless_best_seconds": 10**400}},
+])
+def test_malformed_numeric_data_recovers_without_overwriting_original(tmp_path, payload):
+    kind = next(iter(payload))
+    path = tmp_path / f"{kind}.json"
+    original = json.dumps({"schema_version": 1, **payload})
+    path.write_text(original, encoding="utf-8")
+    store = GameStore(tmp_path)
+    assert store.warnings
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_five_slots_preserve_real_run_snapshot_without_regeneration(tmp_path, monkeypatch):
     from arrow_y2k.campaign import GameRun
     from arrow_y2k.solver import solve

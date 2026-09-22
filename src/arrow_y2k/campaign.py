@@ -1,6 +1,5 @@
 """Campaign progression, countdowns, endless rewards, and exact run snapshots."""
 from dataclasses import dataclass, field
-import math
 from random import Random
 from uuid import uuid4
 
@@ -9,6 +8,7 @@ from .canvas import validate_canvas
 from .generation import GenerateConfig, generate
 from .model import Arrow, Board, Cell, Direction, GameSession, MoveResult
 from .solver import solve
+from .validation import is_finite_number
 
 MODES = ("easy", "medium", "hard", "endless")
 OUTCOMES = ("playing", "level_won", "lost", "campaign_won", "endless_won")
@@ -140,7 +140,7 @@ class GameRun:
         return result
 
     def tick(self, seconds: float) -> None:
-        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+        if not is_finite_number(seconds) or seconds < 0:
             raise ValueError("Elapsed tick must be a finite nonnegative duration")
         if self.outcome != "playing":
             return
@@ -240,7 +240,7 @@ class GameRun:
             value = values[key]
             if key == "seconds_left" and value is None:
                 continue
-            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            if not is_finite_number(value) or value < 0:
                 raise ValueError(f"Invalid {key}")
         if (values["seconds_left"] is None) != (values["difficulty"] == "easy"):
             raise ValueError("Countdown does not match difficulty")

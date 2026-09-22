@@ -153,5 +153,6 @@ def test_heart_shading_is_discrete_and_keeps_outline_identical():
     empty = render_hearts(0)
     assert {HEART_RED, HEART_SHADOW, HEART_LIGHT} <= palette(alive)
     assert palette(alive) <= {BACKGROUND, WHITE, HEART_RED, HEART_SHADOW, HEART_LIGHT}
-    white = lambda image: {(x, y) for x in range(47) for y in range(23) if image.getpixel((x, y)) == WHITE}
+    def white(image):
+        return {(x, y) for x in range(47) for y in range(23) if image.getpixel((x, y)) == WHITE}
     assert white(alive) == white(empty)

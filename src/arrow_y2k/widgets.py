@@ -2,7 +2,7 @@
 from PIL import Image, ImageDraw
 from rich.text import Text
 from rich.cells import cell_len
-from textual.widgets import Button, Select, Static
+from textual.widgets import Button, Select
 from textual.containers import Horizontal
 from textual.geometry import Region
 from .icons import pixel_icon
@@ -49,7 +49,7 @@ class ControlFace:
         self.widget = widget
 
     def __call__(self, width, height):
-        from .desktop import _rasterize_strips
+        from .textual_bridge import _rasterize_strips
         widget = self.widget
         frame = rectangle_face(widget, width, height)
         region = widget.region

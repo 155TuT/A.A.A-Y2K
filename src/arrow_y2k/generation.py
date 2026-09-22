@@ -14,6 +14,7 @@ import math
 
 from .model import Arrow, Board, Cell, Direction
 from .solver import Solution, solve, validate_certificate
+from .validation import is_finite_number
 
 
 @dataclass(frozen=True)
@@ -25,11 +26,14 @@ class GenerateConfig:
     min_length: int = 1
 
     def __post_init__(self) -> None:
-        if not 0 < self.density <= 1:
+        if not isinstance(self.seed, str):
+            raise ValueError("seed must be text")
+        if not is_finite_number(self.density) or not 0 < self.density <= 1:
             raise ValueError("density must be in (0, 1]")
-        if not 1 <= self.min_length <= self.max_length:
+        if (type(self.min_length) is not int or type(self.max_length) is not int
+                or not 1 <= self.min_length <= self.max_length):
             raise ValueError("lengths must satisfy 1 <= min_length <= max_length")
-        if not 0 <= self.turn_bias <= 1:
+        if not is_finite_number(self.turn_bias) or not 0 <= self.turn_bias <= 1:
             raise ValueError("turn_bias must be in [0, 1]")
 
 

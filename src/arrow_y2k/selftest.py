@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from . import __version__
 from .achievements import AchievementService
 from .campaign import GameRun, difficulty_for_level
 from .catalog import maps_for, preset_maps
@@ -868,6 +869,7 @@ def run_self_tests(report_path: str | None = None) -> int:
         result = unittest.TextTestRunner(stream=stream, verbosity=2, resultclass=RecordingResult).run(contract_suite())
     report = {
         "schema_version": 1,
+        "app_version": __version__,
         "suite": "arrow_y2k.shared_contract",
         "frozen": bool(getattr(sys, "frozen", False)),
         "python": sys.version.split()[0],

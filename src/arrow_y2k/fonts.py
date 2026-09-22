@@ -10,8 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from rich.cells import cell_len
 
-CELL_WIDTH = 6
-CELL_HEIGHT = 12
+from .display_config import CELL_HEIGHT as CELL_HEIGHT, CELL_WIDTH as CELL_WIDTH
 FONT_PATH = Path(__file__).parent / "assets" / "fonts" / "fusion-pixel-12px-monospaced-zh_hans.ttf"
 
 

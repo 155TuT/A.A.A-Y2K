@@ -1,8 +1,8 @@
 """Concurrent feedback timelines use the same ordered rule results as play."""
 from PIL import ImageChops
-from arrow_y2k.effects import GameplayEffects, COLLISION_SECONDS, IMPACT_DELAY, HEART_SECONDS
+from arrow_y2k.effects import GameplayEffects, IMPACT_DELAY
 from arrow_y2k.model import Arrow, Board, Direction, GameSession
-from arrow_y2k.pixels import Animation, render_board, render_hearts
+from arrow_y2k.pixels import render_board, render_hearts
 
 
 def test_exits_keep_independent_age_and_pixels_after_leaving_occupancy():

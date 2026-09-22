@@ -1,9 +1,10 @@
 """Page composition supplies consistent navigation without duplicating game rules."""
 from textual.app import ComposeResult
 from .palette import TOKENS
+from .display_config import RESOLUTIONS
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical, VerticalScroll, Center
-from textual.widgets import Static, Input, Select, Switch
+from textual.widgets import Static, Input, Switch
 from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton, PixelSelect, PageHeader, attach_control_face
 
 Button = PixelButton
@@ -188,8 +189,8 @@ class SettingsPage(Page):
                     yield Static("合成点击、碰撞、通关与成就音效。\n音频设备不可用时仍可正常游玩。", classes="mode-help")
                 elif section == "video":
                     yield Static("窗口分辨率")
-                    yield PixelSelect([(s, s) for s in ("1024x768","1280x720","1920x1080")],
-                                 value=cfg.resolution, allow_blank=False, id="cfg-resolution")
+                    yield PixelSelect([(s, s) for s in RESOLUTIONS],
+                                      value=cfg.resolution, allow_blank=False, id="cfg-resolution")
                     with Horizontal(classes="setting-row"):
                         yield Static("减少震动与闪动")
                         yield Switch(cfg.reduced_motion, animate=False, id="cfg-motion")

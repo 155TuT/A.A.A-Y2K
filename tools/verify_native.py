@@ -155,7 +155,6 @@ async def source_host(output):
             point = None
             if pointer is not None:
                 origin = tuple(host._window.position)
-                scale = host.resolution.scale
                 mapped = host.screen_point((pointer[0] - origin[0], pointer[1] - origin[1]))
                 point = (mapped[0] // 6, mapped[1] // 12) if mapped is not None else (-1, -1)
                 from textual.errors import NoWidget
@@ -167,8 +166,8 @@ async def source_host(output):
                 assert app.mouse_over is expected_hover
             if app.hover_over is not None:
                 assert app.hover_over is expected_hover
-            describe = lambda widget: None if widget is None else {
-                "type": type(widget).__name__, "id": widget.id}
+            def describe(widget):
+                return None if widget is None else {"type": type(widget).__name__, "id": widget.id}
             record["restore_pointer"] = {
                 "global_position": pointer, "textual_cell": point,
                 "expected_hit": describe(expected_hover),
