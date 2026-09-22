@@ -9,7 +9,13 @@ import runpy
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-METADATA = runpy.run_path(str(ROOT / "src" / "arrow_y2k" / "__init__.py"))
+
+
+def project_metadata(root: Path = ROOT) -> dict:
+    return runpy.run_path(str(root / "src" / "arrow_y2k" / "__init__.py"))
+
+
+METADATA = project_metadata()
 APP_NAME = METADATA["APP_NAME"]
 VERSION = METADATA["__version__"]
 BUNDLE_ID = "io.github.155tut.arrow-y2k"
@@ -40,12 +46,12 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def source_snapshot() -> dict[str, str]:
-    files = [ROOT / "run.py", ROOT / "pyproject.toml", ROOT / ".gitattributes"]
+def source_snapshot(root: Path = ROOT) -> dict[str, str]:
+    files = [root / "run.py", root / "pyproject.toml", root / ".gitattributes"]
     for directory in ("src/arrow_y2k", "tools", "packaging", ".github/workflows"):
-        files.extend(path for path in (ROOT / directory).rglob("*")
+        files.extend(path for path in (root / directory).rglob("*")
                      if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc")
-    return {path.relative_to(ROOT).as_posix(): digest(path) for path in sorted(files)}
+    return {path.relative_to(root).as_posix(): digest(path) for path in sorted(files)}
 
 
 def compare_reports(source_path: Path, frozen_path: Path) -> dict:

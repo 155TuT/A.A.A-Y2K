@@ -1,6 +1,7 @@
 """Adversarial checks for gates that decide which binaries may be published."""
 import json
 import stat
+import subprocess
 import zipfile
 
 import pytest
@@ -63,13 +64,13 @@ def test_archive_retains_executable_permission_and_symlink(tmp_path):
 
 @pytest.fixture
 def release_matrix(tmp_path, monkeypatch):
-    monkeypatch.setattr(release, "source_snapshot", lambda: {"source": "hash"})
+    monkeypatch.setattr(release, "source_snapshot", lambda root: {"source": "hash"})
     for target, suffixes in release.TARGETS.items():
         folder = tmp_path / target
         folder.mkdir()
         assets, verification = {}, {}
         for suffix in suffixes:
-            name = f"{release.APP_NAME}-{release.VERSION}-{target}{suffix}"
+            name = f"{build_support.APP_NAME}-{build_support.VERSION}-{target}{suffix}"
             asset = folder / name
             asset.write_bytes(name.encode())
             assets[name] = build_support.digest(asset)
@@ -78,7 +79,7 @@ def release_matrix(tmp_path, monkeypatch):
         audit = folder / f"{target}-verification.zip"
         audit.write_bytes(b"test evidence")
         build_support.write_json(folder / f"{target}-manifest.json", {
-            "target": target, "version": release.VERSION, "commit": "commit", "dirty": False,
+            "target": target, "version": build_support.VERSION, "commit": "commit", "dirty": False,
             "source_files_sha256": {"source": "hash"}, "source_frozen_parity": True,
             "test_ids": ["a"], "tests_run": 1, "assets": assets, "install_verification": verification,
             "verification_archive": {"name": audit.name, "sha256": build_support.digest(audit)},
@@ -115,3 +116,111 @@ def test_release_rejects_incomplete_or_mixed_artifacts(release_matrix, corruptio
         build_support.write_json(path, manifest)
     with pytest.raises(RuntimeError):
         release.collect_assets(release_matrix, "commit")
+
+
+@pytest.mark.parametrize("draft", [True, False])
+def test_release_lookup_finds_drafts_and_published_releases_across_pages(monkeypatch, draft):
+    item = {"tag_name": "v0.4.0", "draft": draft, "assets": []}
+
+    def api(arguments, **kwargs):
+        assert arguments == ["gh", "api", "repos/owner/repo/releases?per_page=100", "--paginate", "--slurp"]
+        assert kwargs["encoding"] == "utf-8"
+        return subprocess.CompletedProcess(arguments, 0, json.dumps([[{"tag_name": "v0.3.0"}], [item]]), "")
+
+    monkeypatch.setattr(release.subprocess, "run", api)
+    assert release.github_release("owner/repo", "v0.4.0") == item
+    assert release.github_release("owner/repo", "v9.0.0") is None
+
+
+def test_release_lookup_does_not_treat_api_failure_as_a_missing_release(monkeypatch):
+    monkeypatch.setattr(release.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 1, "", "HTTP 403: permission denied"))
+    with pytest.raises(RuntimeError, match="403"):
+        release.github_release("owner/repo", "v0.4.0")
+
+
+def test_release_uses_original_checkout_metadata_and_hashes(release_matrix, tmp_path, monkeypatch):
+    original = tmp_path / "original"
+    package = original / "src/arrow_y2k"
+    package.mkdir(parents=True)
+    metadata = package / "__init__.py"
+    metadata.write_text(f'APP_NAME = {build_support.APP_NAME!r}\n__version__ = {build_support.VERSION!r}\n')
+    roots = []
+
+    def snapshot(root):
+        roots.append(root)
+        return {"source": "hash"}
+
+    monkeypatch.setattr(release, "source_snapshot", snapshot)
+    assert len(release.collect_assets(release_matrix, "commit", source_root=original)) == 14
+    assert roots == [original]
+    metadata.write_text(f'APP_NAME = {build_support.APP_NAME!r}\n__version__ = "9.0.0"\n')
+    with pytest.raises(RuntimeError, match="Version"):
+        release.collect_assets(release_matrix, "commit", source_root=original)
+
+
+def test_source_snapshot_reads_only_the_requested_checkout(tmp_path):
+    for name in ("run.py", "pyproject.toml", ".gitattributes"):
+        (tmp_path / name).write_text(name)
+    package = tmp_path / "src/arrow_y2k"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("__version__ = '0.0.1'")
+    snapshot = build_support.source_snapshot(tmp_path)
+    assert set(snapshot) == {"run.py", "pyproject.toml", ".gitattributes", "src/arrow_y2k/__init__.py"}
+    assert snapshot["run.py"] == build_support.digest(tmp_path / "run.py")
+
+
+@pytest.mark.parametrize("fault", [None, "commit", "status", "path", "missing_job", "failed_job"])
+def test_resume_requires_the_original_run_and_all_native_installation_jobs(monkeypatch, fault):
+    run = {"head_sha": "commit", "status": "completed", "path": ".github/workflows/build.yml"}
+    jobs = [{"name": f"Build and install ({target})", "conclusion": "success"} for target in release.TARGETS]
+    if fault == "commit":
+        run["head_sha"] = "different"
+    elif fault in ("status", "path"):
+        run[fault] = "wrong"
+    elif fault == "missing_job":
+        jobs.pop()
+    elif fault == "failed_job":
+        jobs[0]["conclusion"] = "failure"
+    monkeypatch.setattr(release, "github_api", lambda endpoint, **kw:
+                        [{"jobs": jobs}] if "/jobs?" in endpoint else run)
+    if fault:
+        with pytest.raises(RuntimeError):
+            release.validate_source_run("owner/repo", 1, "commit")
+    else:
+        release.validate_source_run("owner/repo", 1, "commit")
+
+
+@pytest.mark.parametrize("state", ["new", "draft", "public", "missing_after_upload", "bad_digest"])
+def test_publish_checks_uploaded_draft_before_making_it_public(release_matrix, monkeypatch, state):
+    calls, lookups = [], []
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(release.subprocess, "check_output", lambda *a, **k: "commit\n")
+    monkeypatch.setattr(release.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, "commit\n", ""))
+    monkeypatch.setattr(release, "command", lambda args: calls.append(args))
+
+    def remote(repo, tag):
+        lookups.append(tag)
+        if len(lookups) == 1:
+            return None if state == "new" else {"draft": state != "public"}
+        if state == "missing_after_upload":
+            return None
+        paths = release.collect_assets(release_matrix, "commit") + [release_matrix / "SHA256SUMS.txt"]
+        assets = [{"name": path.name, "size": path.stat().st_size,
+                   "digest": f"sha256:{build_support.digest(path)}"} for path in paths]
+        if state == "bad_digest":
+            assets[0]["digest"] = "sha256:wrong"
+        return {"draft": True, "assets": assets}
+
+    monkeypatch.setattr(release, "github_release", remote)
+    if state in ("public", "missing_after_upload", "bad_digest"):
+        with pytest.raises(RuntimeError):
+            release.publish(release_matrix)
+        assert not any("--draft=false" in call for call in calls)
+        if state == "public":
+            assert not calls
+    else:
+        release.publish(release_matrix)
+        assert "--draft=false" in calls[-1]
+        assert any(call[2] == "create" for call in calls) == (state == "new")

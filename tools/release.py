@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from build_support import APP_NAME, ROOT, VERSION, command, digest, source_snapshot
+from build_support import ROOT, command, digest, project_metadata, source_snapshot
 
 TARGETS = {
     "windows-x64": {"-Setup.exe"},
@@ -17,10 +17,12 @@ TARGETS = {
 }
 
 
-def collect_assets(directory: Path, commit: str) -> list[Path]:
+def collect_assets(directory: Path, commit: str, *, source_root: Path = ROOT) -> list[Path]:
     assets = []
     seen = set()
-    snapshot = source_snapshot()
+    metadata = project_metadata(source_root)
+    version, app_name = metadata["__version__"], metadata["APP_NAME"]
+    snapshot = source_snapshot(source_root)
     shared_tests = None
     for path in sorted(directory.rglob("*-manifest.json")):
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -28,7 +30,7 @@ def collect_assets(directory: Path, commit: str) -> list[Path]:
         if target not in TARGETS or target in seen:
             raise RuntimeError(f"Unexpected or duplicate target: {target}")
         seen.add(target)
-        if manifest["version"] != VERSION or manifest["commit"] != commit or manifest["dirty"]:
+        if manifest["version"] != version or manifest["commit"] != commit or manifest["dirty"]:
             raise RuntimeError(f"Version, commit or clean-tree mismatch: {target}")
         if manifest["source_files_sha256"] != snapshot or not manifest["source_frozen_parity"]:
             raise RuntimeError(f"Source or test parity mismatch: {target}")
@@ -38,7 +40,7 @@ def collect_assets(directory: Path, commit: str) -> list[Path]:
         if shared_tests is not None and tests != shared_tests:
             raise RuntimeError("Platforms did not run the same shared contract.")
         shared_tests = tests
-        expected = {f"{APP_NAME}-{VERSION}-{target}{suffix}" for suffix in TARGETS[target]}
+        expected = {f"{app_name}-{version}-{target}{suffix}" for suffix in TARGETS[target]}
         if set(manifest["assets"]) != expected or set(manifest["install_verification"]) != expected:
             raise RuntimeError(f"Incomplete installation artifacts: {target}")
         for name, checksum in manifest["assets"].items():
@@ -64,41 +66,66 @@ def collect_assets(directory: Path, commit: str) -> list[Path]:
     return sorted(assets, key=lambda path: path.name)
 
 
-def github_release(repo: str, tag: str) -> dict | None:
-    response = subprocess.run(["gh", "api", f"repos/{repo}/releases/tags/{tag}"],
-                              text=True, capture_output=True, check=False)
+def github_api(endpoint: str, *, paginate: bool = False) -> dict | list:
+    arguments = ["gh", "api", endpoint]
+    if paginate:
+        arguments.extend(("--paginate", "--slurp"))
+    response = subprocess.run(arguments,
+                              encoding="utf-8", capture_output=True, check=False)
     if response.returncode:
-        if "HTTP 404" in response.stderr:
-            return None
         raise RuntimeError(response.stderr)
     return json.loads(response.stdout)
 
 
-def publish(directory: Path) -> None:
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    assets = collect_assets(directory, commit)
+def github_release(repo: str, tag: str) -> dict | None:
+    # The tag endpoint only returns published releases. Listing also finds drafts
+    # when the authenticated caller has push access, including resumable uploads.
+    pages = github_api(f"repos/{repo}/releases?per_page=100", paginate=True)
+    return next((item for page in pages for item in page if item["tag_name"] == tag), None)
+
+
+def validate_source_run(repo: str, run_id: int, commit: str) -> None:
+    run = github_api(f"repos/{repo}/actions/runs/{run_id}")
+    if (run["head_sha"] != commit or run["status"] != "completed"
+            or run["path"] != ".github/workflows/build.yml"):
+        raise RuntimeError("Artifacts must come from the completed native workflow at this source commit.")
+    pages = github_api(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100", paginate=True)
+    jobs = {job["name"]: job["conclusion"] for page in pages for job in page["jobs"]}
+    if any(jobs.get(f"Build and install ({target})") != "success" for target in TARGETS):
+        raise RuntimeError("Every native build and installation job must have passed.")
+
+
+def publish(directory: Path, *, source_root: Path = ROOT, source_run: int | None = None) -> None:
+    metadata = project_metadata(source_root)
+    version, app_name = metadata["__version__"], metadata["APP_NAME"]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip()
+    repo = os.environ["GITHUB_REPOSITORY"]
+    if source_run is not None:
+        validate_source_run(repo, source_run, commit)
+    assets = collect_assets(directory, commit, source_root=source_root)
     checksum_file = directory / "SHA256SUMS.txt"
     checksum_file.write_text("".join(f"{digest(path)}  {path.name}\n" for path in assets), encoding="utf-8")
     assets.append(checksum_file)
-    tag = f"v{VERSION}"
+    tag = f"v{version}"
     existing_tag = subprocess.run(["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{}}"],
-                                  cwd=ROOT, text=True, capture_output=True, check=False)
+                                  cwd=source_root, text=True, capture_output=True, check=False)
     if existing_tag.returncode == 0 and existing_tag.stdout.strip() != commit:
         raise RuntimeError("Release tag already points at a different commit; refusing to move it.")
-    notes = ROOT / "docs/releases" / f"{tag}.md"
+    notes = source_root / "docs/releases" / f"{tag}.md"
     if not notes.is_file():
         raise RuntimeError(f"Missing release notes: {notes}")
-    repo = os.environ["GITHUB_REPOSITORY"]
     existing = github_release(repo, tag)
     if existing is not None and not existing["draft"]:
         raise RuntimeError("The release is already public; refusing to overwrite published binaries.")
     if existing is None:
         command(["gh", "release", "create", tag, "--repo", repo, "--draft", "--target", commit,
-                 "--title", f"{APP_NAME} {VERSION}", "--notes-file", str(notes)])
+                 "--title", f"{app_name} {version}", "--notes-file", str(notes)])
     else:
-        command(["gh", "release", "edit", tag, "--repo", repo, "--target", commit, "--notes-file", str(notes)])
+        command(["gh", "release", "edit", tag, "--repo", repo, "--notes-file", str(notes)])
     command(["gh", "release", "upload", tag, "--repo", repo, "--clobber", *map(str, assets)])
     uploaded = github_release(repo, tag)
+    if uploaded is None:
+        raise RuntimeError("Uploaded draft could not be found; refusing to publish.")
     remote = {asset["name"]: asset for asset in uploaded["assets"]}
     if set(remote) != {path.name for path in assets}:
         raise RuntimeError("GitHub release asset inventory differs; leaving it as a draft.")
@@ -114,10 +141,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--source-root", type=Path, default=ROOT,
+                        help="Clean checkout of the commit used to build the artifacts")
+    parser.add_argument("--source-run", type=int, help="Completed native Actions run to validate when resuming")
     args = parser.parse_args()
+    source_root = args.source_root.resolve()
     if args.publish:
-        publish(args.directory)
+        publish(args.directory, source_root=source_root, source_run=args.source_run)
     else:
-        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        for asset in collect_assets(args.directory, commit):
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip()
+        for asset in collect_assets(args.directory, commit, source_root=source_root):
             print(asset.name)

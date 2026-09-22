@@ -59,7 +59,7 @@ Windows 安装和 macOS PKG 检查会写系统安装状态，因此脚本限制�
 
 工作流 `.github/workflows/build.yml` 使用 Windows 2022 x64、macOS 14 arm64、macOS 15 Intel 与 Ubuntu 22.04 x64 的独立原生 runner，Python 固定为 3.13.5。主要构建和测试依赖固定在 `packaging/constraints.txt`；实际解析到的全部依赖版本写入每个平台的清单。官方 Action 依赖固定到提交 SHA。
 
-- `main` 推送、相关 PR 和手动运行：检查、构建、安装验证，上传 Actions artifacts。
+- 相关 PR 和手动运行：检查、构建、安装验证，上传 Actions artifacts。
 - 推送 `v<版本>` 标签：上述四个平台全部成功后自动发布。
 - 手动运行勾选 `publish`：同样在整个矩阵通过后发布当前源码版本。
 
@@ -67,12 +67,14 @@ Windows 安装和 macOS PKG 检查会写系统安装状态，因此脚本限制�
 
 ```sh
 # 先修改 __version__，更新 docs/releases/v<版本>.md，提交并推送代码。
-# 在 main 的原生矩阵通过后，为同一提交创建标签。
+# 本地验证并完成代码审查后创建标签；标签工作流会完整验证四个平台。
 git tag -a v0.4.0 -m "A.A.A-Y2K 0.4.0"
 git push origin v0.4.0
 ```
 
 仅最终发布作业具有 `contents: write` 权限。`release.py` 要求四个目标齐全，核对版本、提交、干净工作区、源码指纹、共享测试清单、安装验证与文件哈希；先上传草稿 Release，核验 GitHub 返回的资产数量、大小和 SHA-256 后再公开。任何失败都不发布部分平台包，不覆盖已公开版本，也不移动已存在的版本标签。
+
+如果四个平台均成功而上传或发布阶段失败，在 Actions 中手动运行 **Publish verified artifacts**，填写原生工作流的 `run_id` 和已有版本标签。它使用当前发布器读取该标签的独立源码检出，确认原始运行的提交和四项安装作业成功，再下载同一批产物、恢复草稿并重新核验所有哈希；不重新构建，不改写标签，也不接受已经公开的 Release。源码元数据和指纹来自原始检出，不会因发布器后续修复而混用当前分支的版本或文件。草稿查询使用包含草稿的分页 Release 列表接口。
 
 Release 除安装文件外还附带各平台 `*-manifest.json`、`*-verification.zip` 和总校验文件 `SHA256SUMS.txt`。验证归档包括 pytest XML、源码与冻结程序报告、安装报告、正常运行截图和 Windows 安装/卸载日志。
 

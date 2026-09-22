@@ -15,10 +15,9 @@ on:
       - 'packaging/**'
       - 'run.py'
       - 'pyproject.toml'
-      - '.github/workflows/build.yml'
+      - '.github/workflows/**'
       - '.gitattributes'
   push:
-    branches: [main]
     tags: ['v*']
 
 permissions:
