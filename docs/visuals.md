@@ -21,6 +21,18 @@ network are required. Master and effect levels are floats from 0 to 1; the app
 persists those settings. Muting stops existing effects immediately. A missing
 audio device is silent and does not alter gameplay.
 
+The home menu uses native pixel play, folder, trophy, map and gear icons.
+`icons.py` owns these finite-palette sprites; the credit heart is cropped from
+`render_hearts`, keeping its outline, highlight and shadow identical to LIFE.
+The first button row shares the full-width rows' left and right edges. Exit
+and GitHub occupy visually square outline buttons at the two bottom corners.
+Exit actions on other pages share the red outline and white exit icon, with
+text retained to distinguish returning home from exiting the application.
+The footer reads `Made By 155TuT with GPT and ♥ Love`.
+
+`PixelButton` only decorates Textual's content area; Textual retains layout,
+focus, keyboard activation and hit testing.
+
 The SDL host forwards close, Alt+F4 and the close capability to
 `app.request_desktop_exit()` so the app can save first. Window dragging is
 allowed only when `app.allow_window_drag` is true; it never consumes gameplay

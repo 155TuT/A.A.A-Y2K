@@ -2,6 +2,8 @@ Screen { background: #10171b; color: #cfdbd4; layers: base overlay; }
 Page { background: #10171b; }
 Button { background: #10171b; color: #b9c9c0; border: solid #425f50; min-width: 8; height: 3; padding: 0; content-align: center middle; text-style: none; }
 Button:hover, Button:focus { background: #1c3028; color: #72d69c; border: solid #72d69c; text-style: none; }
+Button.danger, Button.danger:focus { color: #eef4e9; border: solid #c96579; }
+Button.danger:hover { background: #3a232c; color: #eef4e9; border: solid #f07b90; }
 Button:disabled { color: #455950; border: solid #2b3d33; background: #10171b; }
 Button.primary, Button.selected { color: #72d69c; border: solid #72d69c; }
 Button.subtle { border: none; color: #688f7a; }
@@ -18,10 +20,14 @@ Center { height: 1fr; }
 .mode-help { height: auto; min-height: 3; margin-top: 1; color: #789886; }
 .button-row { height: 3; width: 100%; }
 .button-row Button, .button-row Input { width: 1fr; }
-.button-row Button { margin-right: 1; }
+.button-row Button { margin-right: 0; }
 .tight Button { margin-right: 0; min-width: 8; }
 #home-title { height: 5; margin-top: 1; }
-#home-menu { width: 42; height: 18; }
+#home-menu { width: 42; height: 15; }
+#new-game { margin-right: 1; }
+#home-links { height: 3; width: 100%; }
+#home-links-space { width: 1fr; }
+#home-links Button.icon-only { width: 5; min-width: 5; height: 3; }
 #home-menu > Button { width: 100%; }
 .home-foot { height: 2; content-align: center middle; color: #668474; }
 #game-layout { height: 1fr; margin: 1; }

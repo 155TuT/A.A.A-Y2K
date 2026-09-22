@@ -15,6 +15,7 @@
 | `achievements.py` | 解锁条件、累计统计和成绩去重；由应用保存结果 |
 | `audio.py` | 合成音效、音量与设备生命周期 |
 | `pixels.py` | 像素画、蛇形路径动画、心碎动画、像素命中坐标 |
+| `icons.py` | 菜单的有限调色板像素图标；爱心复用生命渲染器 |
 | `widgets.py` | Textual 栅格控件和鼠标/键盘到格子的适配 |
 | `pages.py` | 各页面组件的组合和布局 |
 | `app.py` | 组合服务、路由、60 Hz 时钟、保存调度及动画协调 |
@@ -23,7 +24,7 @@
 | `__main__.py` | 源码和打包程序共用入口，无控制台进程的日志流适配 |
 | `selftest.py` | 源码和冻结程序共用的行为验证套件 |
 
-组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
+组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService` 和 `AudioController`；`PixelHost` 接收 Textual App。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
 
 游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。
 
@@ -36,6 +37,10 @@
 点击立即提交规则结果，但使用返回的 `MoveResult` 播放画面，因此飞出的箭头即使已从占用表移除仍能完整显示动画。动画过程中锁定棋盘输入。重来/切换关卡可以中止旧动画，不携带扣血状态。
 
 折线动画将旧路径表示为正交像素折线，头部方向追加无限延伸的射线，按曼哈顿弧长平移一个等长窗口。位于窗口内的所有折点保留，所以尾部沿旧轨迹转弯，不把整条折线作刚体平移，也不在拐角处拉出斜线。碰撞时位移达到障碍前沿，短暂垂直抖动，再沿相同路径退回；规则层不更新中间动画位置。
+
+## 控件状态与原生窗口
+
+`PixelButton` 保留 Textual Button 的事件和标签，仅组合图标绘制内容。没有另写一套控件命中或导航规则。
 
 ## 生成器为什么终止、有解
 

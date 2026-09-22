@@ -3,13 +3,14 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical, VerticalScroll, Center
 from textual.widgets import Button, Static, Input, Select, Switch
-from .widgets import BoardView, HeartsView, SaveHearts, TitleView
+from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton
 
 MODE_NAMES = {"easy": "简单", "medium": "中等", "hard": "困难", "endless": "无尽"}
 
 
 class Page(Screen):
     """Every full page inherits the same button routing and toast area."""
+    AUTO_FOCUS = ""
     def header(self, title):
         return Static(title, classes="page-header")
 
@@ -34,14 +35,16 @@ class HomePage(Page):
         with Center():
             with Vertical(id="home-menu"):
                 with Horizontal(classes="button-row"):
-                    yield Button("开始游戏", id="new-game", classes="primary")
-                    yield Button("读取存档", id="open-saves")
-                yield Button("成就", id="open-achievements")
-                yield Button("地图创作", id="open-editor")
-                yield Button("设置", id="open-settings")
-                yield Button("退出到桌面", id="exit-desktop")
-                yield Button("GitHub  /  项目主页", id="github", classes="subtle")
-        yield Static("ESC  菜单     ·     PYTHON / TEXTUAL", classes="home-foot")
+                    yield PixelButton("开始游戏", icon="play", id="new-game", classes="primary")
+                    yield PixelButton("读取存档", icon="folder", id="open-saves")
+                yield PixelButton("成就", icon="trophy", id="open-achievements")
+                yield PixelButton("地图创作", icon="map", id="open-editor")
+                yield PixelButton("设置", icon="gear", id="open-settings")
+                with Horizontal(id="home-links"):
+                    yield PixelButton("退出到桌面", icon="exit", icon_only=True, id="exit-desktop", classes="danger")
+                    yield Static("", id="home-links-space")
+                    yield PixelButton("GitHub / 项目主页", icon="github", icon_only=True, id="github")
+        yield CreditsView(classes="home-foot")
         yield self.toast()
 
 
@@ -56,7 +59,7 @@ class DifficultyPage(Page):
                     yield Button(name if unlocked else name + " / 尚未解锁",
                                  id="start-" + key, disabled=not unlocked)
                 yield Static("所有模式从第 1 关编号开始。\n简单过第 3 关转中等；中等过第 10 关转困难。\n中等 10:00 / 困难 08:00 / 无尽 00:30", classes="mode-help")
-                yield Button("返回主页", id="go-home")
+                yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -91,8 +94,8 @@ class PausePage(Page):
                 yield Button("读取存档 / 手动保存", id="open-saves")
                 yield Button("设置", id="open-settings")
                 yield Button("最小化", id="minimize")
-                yield Button("退出到主页", id="go-home")
-                yield Button("退出到桌面", id="exit-desktop")
+                yield PixelButton("退出到主页", icon="exit", classes="danger", id="go-home")
+                yield PixelButton("退出到桌面", icon="exit", classes="danger", id="exit-desktop")
                 yield Static("计时已暂停。\n手动保存可随时使用；自动保存遵循基本设置。", classes="mode-help")
         yield self.toast()
 
@@ -113,7 +116,7 @@ class ResultPage(Page):
                 if lost or game.custom:
                     yield Button("再试一次", id="restart", classes="primary")
                 yield Button("读取存档 / 手动保存", id="open-saves")
-                yield Button("退出到主页", id="go-home")
+                yield PixelButton("退出到主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -198,7 +201,7 @@ class AchievementsPage(Page):
             for achievement in self.app.achievements.list_all():
                 mark = "[#72d69c]已达成[/]" if achievement.unlocked else "[#62796c]未达成[/]"
                 yield Static(f"{mark}  {achievement.title}\n    {achievement.description}", classes="achievement-row")
-        yield Button("返回主页", id="go-home")
+        yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -232,7 +235,7 @@ class EditorPage(Page):
                     yield Button("导入", id="editor-import")
                     yield Button("清空", id="editor-clear")
                     yield Button("试玩", id="editor-play", classes="primary")
-                yield Button("返回主页", id="go-home")
+                yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 

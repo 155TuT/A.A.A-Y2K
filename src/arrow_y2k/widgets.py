@@ -2,6 +2,9 @@
 from PIL import Image
 from rich.text import Text
 from rich.style import Style
+from rich.cells import cell_len
+from textual.widgets import Button
+from .icons import pixel_icon
 from textual import events
 from textual.widget import Widget
 from .pixels import (render_board, render_hearts, render_mask_editor, hit_test,
@@ -31,6 +34,59 @@ class RasterView(Widget):
         if self.app.native:
             return Text("")
         return half_blocks(self.native_frame(max(1, self.size.width), max(2, self.size.height * 2)))
+
+
+class PixelButton(Button):
+    """Textual keeps input and accessibility; a sprite decorates its content."""
+    def __init__(self, label, *, icon=None, icon_only=False, **kwargs):
+        super().__init__(label, **kwargs)
+        self.icon = icon
+        self.icon_only = icon_only
+        if icon_only:
+            self.add_class("icon-only")
+            self.tooltip = label
+
+    def native_frame(self, width, height):
+        background = self.styles.background.rgb
+        frame = Image.new("RGB", (width, height), background)
+        label = "" if self.icon_only else self.label.plain
+        label_width = cell_len(label) * 6
+        art_width = 12 if self.icon else 0
+        gap = 6 if self.icon and label else 0
+        left = max(0, (width - label_width - art_width - gap) // 2)
+        top = max(0, (height - 12) // 2)
+        if self.icon:
+            art = pixel_icon(self.icon)
+            frame.paste(art, (left, top), art)
+        draw_text(frame, (left + art_width + gap, top), label, self.styles.color.rgb)
+        return frame
+
+    def render(self):
+        if getattr(self.app, "native", False):
+            return Text("")
+        if self.icon_only:
+            return Text({"exit": "→", "github": "GH"}.get(self.icon, self.label.plain))
+        return super().render()
+
+
+class CreditsView(RasterView):
+    PREFIX = "Made By 155TuT with GPT and "
+    SUFFIX = " Love"
+
+    def native_frame(self, width, height):
+        frame = Image.new("RGB", (width, height), BACKGROUND)
+        left = max(0, (width - (len(self.PREFIX + self.SUFFIX) * 6 + 13)) // 2)
+        top = max(0, (height - 12) // 2)
+        color = (102, 132, 116)
+        draw_text(frame, (left, top), self.PREFIX, color)
+        left += len(self.PREFIX) * 6
+        heart = pixel_icon("heart")
+        frame.paste(heart, (left, top), heart)
+        draw_text(frame, (left + heart.width, top), self.SUFFIX, color)
+        return frame
+
+    def render(self):
+        return Text("") if self.app.native else Text(self.PREFIX + "♥" + self.SUFFIX, justify="center", style="#668474")
 
 
 class TitleView(RasterView):
