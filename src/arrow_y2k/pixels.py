@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import cos, floor, pi, sin
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 from PIL import Image, ImageDraw
 
@@ -285,6 +285,7 @@ def render_board(
     animation: Animation | None = None,
     cursor: Cell | None = None,
     red_ids: Iterable[str] = (),
+    animations: Iterable[Animation] = (),
 ) -> Image.Image:
     """Render a board as RGB pixels, optionally fitted to a display canvas."""
     min_x, min_y, columns, rows = _bounds(board.mask)
@@ -294,18 +295,19 @@ def render_board(
     if cursor is not None and cursor in board.mask:
         cx, cy = (cursor[0] - min_x) * STRIDE, (cursor[1] - min_y) * STRIDE
         draw.rectangle((cx + 2, cy + 2, cx + 14, cy + 14), outline=MINT, width=1)
-    animated_id = animation.arrow.id if animation else None
-    arrows = list(board.arrows)
-    # An exiting arrow may already have been removed from logical occupancy.
-    if animation is not None and not any(a.id == animated_id for a in arrows):
-        arrows.append(animation.arrow)
-    arrows.sort(key=lambda arrow: arrow.id == animated_id)
-    for arrow in arrows:
+    frames = {frame.arrow.id: frame for frame in animations}
+    if animation is not None:
+        frames[animation.arrow.id] = animation
+    arrows = {arrow.id: arrow for arrow in board.arrows}
+    # Successful arrows leave occupancy immediately but keep independent visuals.
+    arrows.update({arrow_id: frame.arrow for arrow_id, frame in frames.items()})
+    for arrow in sorted(arrows.values(), key=lambda arrow: arrow.id in frames):
         color = MINT if arrow.id in (hovered, hint) else RED if arrow.id in red_ids else WHITE
         points = _arrow_path(arrow, min_x, min_y)
         offset = (0, 0)
-        if animation is not None and arrow.id == animated_id:
-            points, override, offset = _animated_path(arrow, points, animation, image.size)
+        frame = frames.get(arrow.id)
+        if frame is not None:
+            points, override, offset = _animated_path(arrow, points, frame, image.size)
             color = override or color
         _draw_arrow(draw, points, arrow.direction.delta, color, offset)
     if size is None:
@@ -351,6 +353,8 @@ def render_hearts(
     lives: int,
     progress: float | None = None,
     lost_index: int | None = None,
+    *,
+    damage: Mapping[int, float] | None = None,
 ) -> Image.Image:
     """Draw three shaded, white-outline hearts and falling, split interiors.
 
@@ -364,13 +368,18 @@ def render_hearts(
         raise ValueError("Heart index must be zero, one, or two")
     image = Image.new("RGB", HEART_IMAGE_SIZE, BACKGROUND)
     draw = ImageDraw.Draw(image)
-    p = None if progress is None else max(0.0, min(1.0, progress))
+    frames = dict(damage or {})
+    if lost_index is not None and progress is not None:
+        frames[lost_index] = max(0.0, min(1.0, progress))
+    if any(index not in range(3) for index in frames):
+        raise ValueError("Heart index must be zero, one, or two")
     for index in range(3):
+        p = frames.get(index)
         ox, oy = 1 + 16 * index, 1
-        if index < lives:
+        if index < lives or (p is not None and p < 0):
             for x, y in _HEART_FILL:
                 draw.point((ox + x, oy + y), fill=_heart_color(x, y))
-        elif index == lost_index and p is not None and p < 0.92:
+        elif p is not None and p < 0.92:
             separation = round(2 * p)
             drop = round(8 * p * p)
             for x, y in _HEART_FILL:

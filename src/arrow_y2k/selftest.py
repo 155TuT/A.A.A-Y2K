@@ -446,6 +446,67 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(self.app.game.seconds_left, 232.25)
 
 
+    async def test_concurrent_clicks_finish_independently_and_delay_result(self):
+        async with self.app.run_test(size=(120, 44)) as pilot:
+            self.app.start_game("easy")
+            await pilot.pause()
+            arrows = tuple(Arrow(str(x), ((x, 0),), Direction.UP) for x in range(3))
+            self.app.game.session = GameSession(Board(frozenset((x, 0) for x in range(3)), arrows))
+            self.app.reset_visuals()
+            self.app.click_cell((0, 0))
+            self.app.click_cell((1, 0))
+            self.assertEqual(len(self.app.game.session.remaining), 1)
+            self.assertEqual(len(self.app.effects.animations), 2)
+            self.clock.value += .2
+            self.app.click_cell((2, 0))
+            self.assertEqual(len(self.app.effects.animations), 3)
+            self.assertGreater(self.app.effects.animations[0].progress, self.app.effects.animations[-1].progress)
+            self.assertEqual(self.app.game.outcome, "level_won")
+            self.assertEqual(self.app.page, "game")
+            self.clock.value += .5
+            self.app.tick()
+            self.assertEqual(len(self.app.effects.animations), 1)
+            self.assertEqual(self.app.page, "game")
+            self.clock.value += .2
+            self.app.tick()
+            await pilot.pause()
+            self.assertEqual(self.app.page, "result")
+            self.assertFalse(self.app.effects.active)
+
+    async def test_busy_arrow_deduplication_and_pointer_reset(self):
+        from textual.widgets import Button
+        self.app.store.profile.unlocked_modes.add("medium")
+        async with self.app.run_test(size=(120, 44)) as pilot:
+            self.app.start_game("medium")
+            await pilot.pause()
+            board = Board(frozenset({(0, 0), (1, 0), (2, 0)}), (
+                Arrow("a", ((0, 0),), Direction.RIGHT),
+                Arrow("b", ((1, 0),), Direction.RIGHT),
+                Arrow("c", ((2, 0),), Direction.UP),
+            ))
+            self.app.game.session = GameSession(board)
+            self.app.reset_visuals()
+            self.app.play_arrow("a")
+            self.app.play_arrow("a")
+            self.app.play_arrow("b")
+            self.assertEqual((self.app.session.lives, self.app.session.moves, self.app.game.seconds_left), (1, 2, 220))
+            self.assertEqual(set(self.app.effects.heart_frames), {1, 2})
+            self.app.play_arrow("c")
+            self.assertNotIn("c", self.app.session.remaining)
+            self.assertEqual(len(self.app.effects.animations), 3)
+            self.app.action_menu()
+            await pilot.pause()
+            button = self.app.screen.query_one(Button)
+            self.app.screen.set_focus(button)
+            button.add_class("-active")
+            self.app._set_mouse_over(button, None)
+            self.app.reset_pointer_state()
+            self.assertIsNone(self.app.mouse_over)
+            self.assertIsNone(self.app.screen.focused)
+            self.assertFalse(button.has_class("-active"))
+            self.assertFalse(self.app.screen.ALLOW_SELECT)
+            self.assertTrue(all(item.active_effect_duration == 0 for item in self.app.screen.query(Button)))
+
     async def test_native_host_exports_integer_scaled_frame(self):
         from PIL import Image, ImageChops
         from .desktop import run_desktop

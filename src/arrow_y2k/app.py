@@ -17,7 +17,7 @@ from .generation import GenerateConfig
 from .storage import GameStore, DomainStorageError
 from .achievements import AchievementService
 from .audio import AudioController
-from .pixels import Animation
+from .effects import GameplayEffects
 from .solver import solve
 from .pages import PAGES, MODE_NAMES
 
@@ -52,12 +52,7 @@ class ArrowApp(App):
         self.settings_section = "basic"
         self.last_tick = self.clock()
         self.autosave_elapsed = 0.0
-        self.animation = None
-        self.animation_elapsed = 0.0
-        self.animation_duration = .65
-        self.heart_progress = None
-        self.heart_elapsed = None
-        self.lost_index = None
+        self.effects = GameplayEffects()
         self._label_values = {}
         self.hovered = self.hint_id = None
         self.cursor = (0, 0)
@@ -209,9 +204,7 @@ class ArrowApp(App):
             self.show_toast("成绩保存失败", str(error))
 
     def reset_visuals(self):
-        self.animation = None
-        self.animation_elapsed = 0.0
-        self.heart_elapsed = self.heart_progress = self.lost_index = None
+        self.effects.clear()
         self.hovered = self.hint_id = None
         self.failed_ids.clear()
         self.auto_solving = False
@@ -230,7 +223,7 @@ class ArrowApp(App):
         self.route("game")
 
     def click_cell(self, cell):
-        if self.page != "game" or not self.game or self.animation or self.game.outcome != "playing":
+        if self.page != "game" or not self.game or self.game.outcome != "playing":
             return
         self.cursor = cell
         arrow_id = self.session.current_board.occupancy.get(cell)
@@ -239,25 +232,22 @@ class ArrowApp(App):
             self.play_arrow(arrow_id)
 
     def play_arrow(self, arrow_id):
-        if not self.game or self.animation or self.game.outcome != "playing":
+        if not self.game or self.game.outcome != "playing":
             return
         self.consume_game_time()
         if self.game.outcome != "playing":
-            self.process_result()
+            if not self.effects.active:
+                self.process_result()
+            return
+        if self.effects.busy(arrow_id):
             return
         result = self.game.click(arrow_id)
         if result.kind == "ignored":
             return
         self.hovered = self.hint_id = None
         collision = result.kind == "collision"
-        self.animation_duration = .95 if collision else .65
-        self.animation_elapsed = 0.0
-        self.animation = Animation(result.arrow, "collision" if collision else "exit", 0.0,
-                                   result.collision.distance if collision else None)
+        self.effects.start(result)
         if collision:
-            self.lost_index = self.session.lives
-            self.heart_elapsed = -self.animation_duration * .30
-            self.heart_progress = 0.0
             penalty = self.game.collision_penalty_seconds
             feedback = f"扣除 {penalty} 秒。" if penalty else "先移除头部射线上的遮挡。"
             self.message = "[#d96b9e]发生碰撞。[/]\n" + feedback
@@ -277,6 +267,7 @@ class ArrowApp(App):
         if self.page != "game" or not self.game or not self._page_ready:
             return 0.0
         self.game.tick(dt)
+        self.failed_ids.update(self.effects.advance(dt))
         self.autosave_elapsed += dt
         if self.store.settings.autosave and self.autosave_elapsed >= self.store.settings.save_minutes * 60:
             self.auto_save()
@@ -290,23 +281,10 @@ class ArrowApp(App):
             self.advance_toast()
         if self.page != "game" or not self.game or not self._page_ready:
             return
-        if self.animation:
-            self.animation_elapsed += dt
-            p = min(1.0, self.animation_elapsed / self.animation_duration)
-            self.animation = Animation(self.animation.arrow, self.animation.kind, p, self.animation.collision_distance)
-            if p >= 1.0:
-                if self.animation.kind == "collision":
-                    self.failed_ids.add(self.animation.arrow.id)
-                self.animation = None
-        if self.heart_elapsed is not None:
-            self.heart_elapsed += dt
-            self.heart_progress = max(0.0, min(1.0, self.heart_elapsed / .7))
-            if self.heart_progress >= 1:
-                self.heart_elapsed = self.heart_progress = self.lost_index = None
-        if not self.animation and self.game.outcome != "playing":
+        if not self.effects.active and self.game.outcome != "playing":
             self.process_result()
             return
-        if self.auto_solving and not self.animation and self.game.outcome == "playing":
+        if self.auto_solving and not self.effects.active and self.game.outcome == "playing":
             solution = solve(self.session.current_board)
             if solution.order:
                 self.play_arrow(solution.order[0])
@@ -363,7 +341,7 @@ class ArrowApp(App):
         self.exit()
 
     def action_hint(self):
-        if self.page != "game" or self.animation or self.game.outcome != "playing":
+        if self.page != "game" or not self.game or self.game.outcome != "playing":
             return
         solution = solve(self.session.current_board)
         self.hint_id = solution.order[0] if solution.order else None

@@ -148,12 +148,13 @@ class BoardView(RasterView):
             frame = Image.new("RGB", (width, height), BACKGROUND)
             frame.paste(image, (geometry.origin_x, geometry.origin_y))
             return frame
-        animation = app.animation
-        if animation and app.store.settings.reduced_motion:
-            progress = 1.0 if animation.kind == "exit" or animation.progress >= .30 else 0.0
-            animation = Animation(animation.arrow, animation.kind, progress, animation.collision_distance)
+        animations = app.effects.animations
+        if app.store.settings.reduced_motion:
+            animations = tuple(Animation(item.arrow, item.kind,
+                               1.0 if item.kind == "exit" or item.progress >= .30 else 0.0,
+                               item.collision_distance) for item in animations)
         return render_board(app.session.current_board, size=(width, height), hovered=app.hovered,
-                            hint=app.hint_id, animation=animation,
+                            hint=app.hint_id, animations=animations,
                             cursor=app.cursor if self.has_focus else None, red_ids=app.failed_ids)
 
     def render(self):
@@ -260,12 +261,10 @@ class SaveHearts(RasterView):
 class HeartsView(SaveHearts):
     def art(self):
         app = self.app
-        before = app.heart_elapsed is not None and app.heart_elapsed < 0
-        progress = None if before else app.heart_progress
-        if app.store.settings.reduced_motion and progress is not None:
-            progress = 1.0
-        return render_hearts(app.session.lives + int(before), progress=progress,
-                             lost_index=None if before else app.lost_index)
+        damage = app.effects.heart_frames
+        if app.store.settings.reduced_motion:
+            damage = {index: 1.0 if progress >= 0 else progress for index, progress in damage.items()}
+        return render_hearts(app.session.lives, damage=damage)
 
     def zoom(self, width, height):
         board = self.app.screen.query_one("#board")

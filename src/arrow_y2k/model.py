@@ -118,8 +118,9 @@ class GameSession:
     """One mutable game; ``board`` stays original, ``current_board`` is a snapshot.
 
     Clicks commit the rule outcome immediately. The presentation layer can animate
-    ``MoveResult.arrow`` after it has been removed, and should lock input until
-    that animation finishes. A failed click leaves the arrow in place.
+    ``MoveResult.arrow`` after it has been removed while other arrows remain
+    clickable. Only repeated input on a currently animating arrow is ignored by
+    the presentation coordinator. A failed click leaves the arrow in place.
     """
 
     board: Board

@@ -116,16 +116,16 @@ async def test_collision_animation_freezes_while_paused_and_resumes(tmp_path):
                        if app.session.current_board.first_collision(a.id) is not None)
         await native_click(app, pilot, blocked.head)
         assert app.session.lives == 2
-        assert app.animation.kind == "collision"
+        assert app.effects.animations[0].kind == "collision"
         await advance(app, clock, pilot, .2)
-        frozen = app.animation.progress
+        frozen = app.effects.animations[0].progress
         await pilot.press("escape")
         await advance(app, clock, pilot, 100)
-        assert app.animation.progress == frozen
+        assert app.effects.animations[0].progress == frozen
         assert app.session.lives == 2
         await click(pilot, "#resume")
         await advance(app, clock, pilot, 1)
-        assert app.animation is None
+        assert not app.effects.active
         assert blocked.id in app.failed_ids
         assert app.game.seconds_left == pytest.approx(228.8)
 

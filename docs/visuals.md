@@ -13,7 +13,11 @@ creating a restrained bevel without antialiasing. Motion still samples the
 original orthogonal path by arc length. Hover is muted fluorescent green
 `#72d69c`; collision is muted pink `#d96b9e`. White-outlined hearts retain their
 outline after damage, with fixed red shadow/highlight pixels that travel with
-the falling fragments.
+the falling fragments. Each arrow and each damaged heart has an independent
+timeline composed by `GameplayEffects`: other arrows remain clickable while
+an exit or rebound is playing. Multiple losses preserve separate heart
+fragments; pausing freezes every timeline. Rendering never changes occupancy,
+life counts or countdown penalties.
 
 `AudioController` is the sole mixer owner. It synthesises click, collision,
 win, lose and achievement effects as signed 16-bit PCM; no sound files or

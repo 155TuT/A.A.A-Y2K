@@ -52,10 +52,12 @@ async def capture_resolution(name, output, fixture_root):
             if app.game is not None:
                 record["game"] = {"mode": app.game.mode, "level": app.game.level_index,
                                   "cells": len(app.session.board.mask), "lives": app.session.lives,
-                                  "left": len(app.session.remaining), "seed": app.game.seed}
-            if app.animation is not None:
-                record["animation"] = {"kind": app.animation.kind, "progress": app.animation.progress,
-                                       "heart_progress": app.heart_progress}
+                                  "left": len(app.session.remaining), "seed": app.game.seed,
+                                  "difficulty": app.game.difficulty, "seconds_left": app.game.seconds_left}
+            if app.effects.active:
+                record["animations"] = [{"id": item.arrow.id, "kind": item.kind, "progress": item.progress}
+                                        for item in app.effects.animations]
+                record["heart_frames"] = app.effects.heart_frames
             records.append(record)
 
         await snap("home")
@@ -84,7 +86,7 @@ async def capture_resolution(name, output, fixture_root):
             if index < 3:
                 for arrow_id in solve(app.session.current_board).order:
                     app.play_arrow(arrow_id)
-                    clock.now += .70
+                    clock.now += app.effects.remaining_seconds + .01
                     app.tick()
                     await pilot.pause()
                 assert app.page == "result" and app.game.outcome == "level_won"
@@ -92,6 +94,14 @@ async def capture_resolution(name, output, fixture_root):
                 await pilot.pause()
         app.start_game("hard")
         await snap("game-hard")
+        for arrow_id in solve(app.session.current_board).order[:3]:
+            app.play_arrow(arrow_id)
+        clock.now += .20
+        app.tick()
+        await snap("concurrent-arrows")
+        clock.now += app.effects.remaining_seconds + .01
+        app.tick()
+        await pilot.pause()
         # Build the five summary rows from legal game-state changes. These are
         # disposable fixtures, never claims about a real player's performance.
         app.store.save_slot(0, app.game)
@@ -163,7 +173,7 @@ async def main():
         for name in RESOLUTIONS:
             records.extend(await capture_resolution(name, output, fixture_root))
     sources = {}
-    for filename in ("app.py", "pages.py", "widgets.py", "pixels.py", "desktop.py", "game.tcss", "campaign.py", "catalog.py", "generation.py"):
+    for filename in ("app.py", "pages.py", "widgets.py", "pixels.py", "desktop.py", "game.tcss", "campaign.py", "catalog.py", "generation.py", "effects.py", "icons.py", "windowing.py"):
         sources[filename] = hashlib.sha256((ROOT / "src" / "arrow_y2k" / filename).read_bytes()).hexdigest()
     report = {"kind": "isolated synthetic UI fixtures; not real player progress",
               "renderer": "actual Textual compositor plus shared native raster widgets",

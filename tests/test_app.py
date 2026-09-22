@@ -48,7 +48,7 @@ async def step(app, pilot, clock, seconds):
 
 
 async def finish(app, pilot, clock):
-    await step(app, pilot, clock, app.animation_duration + 0.01)
+    await step(app, pilot, clock, app.effects.remaining_seconds + 0.01)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "lives"])
@@ -300,3 +300,111 @@ async def test_profile_write_failure_keeps_playable_progress_and_reports_error(t
         app.play_arrow("a1")
         assert app.store.profile.total_arrows == 2
         assert GameStore(tmp_path).profile.total_arrows == 2
+
+
+@pytest.mark.parametrize("count", [2, 3])
+async def test_zero_interval_clicks_remove_different_arrows_with_independent_animations(tmp_path, count):
+    clock = Clock()
+    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, count=count)
+        before = clock.value
+        for index in range(count):
+            app.play_arrow(f"a{index}")
+            assert len(game.session.remaining) == count - index - 1
+            assert len(app.effects.animations) == index + 1
+        assert clock.value == before
+        assert app.store.profile.total_arrows == count
+        assert {a.arrow.id for a in app.effects.animations} == {f"a{i}" for i in range(count)}
+        assert all(a.progress == 0 for a in app.effects.animations)
+        assert game.outcome == "level_won" and app.page == "game" and not game.counted
+        await step(app, pilot, clock, .3)
+        assert len(app.effects.animations) == count and all(0 < a.progress < 1 for a in app.effects.animations)
+        assert app.page == "game" and not game.counted
+        await finish(app, pilot, clock)
+        assert app.page == "result" and game.counted and not app.effects.active
+
+
+async def test_busy_collision_is_not_charged_twice_and_another_arrow_still_moves(tmp_path):
+    clock = Clock()
+    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "medium", count=3, blocked=True)
+        app.play_arrow("a0")
+        assert (game.session.lives, game.seconds_left, game.session.moves) == (2, 230, 1)
+        for _ in range(4):
+            app.play_arrow("a0")
+        assert (game.session.lives, game.seconds_left, game.session.moves) == (2, 230, 1)
+        app.play_arrow("a1")
+        assert "a1" not in game.session.remaining
+        assert {a.arrow.id: a.kind for a in app.effects.animations} == {"a0": "collision", "a1": "exit"}
+        assert game.session.moves == 2 and game.session.lives == 2
+        await finish(app, pilot, clock)
+        # The original arrow is clickable again after its own collision finishes.
+        app.play_arrow("a0")
+        assert game.session.moves == 3 and game.session.lives == 1
+
+
+async def test_two_shattered_hearts_keep_independent_timelines_and_pause_together(tmp_path):
+    clock = Clock()
+    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "medium", count=3)
+        game.session = GameSession(Board(frozenset({(0,0),(1,0),(2,0)}), (
+            Arrow("a0", ((0,0),), Direction.RIGHT),
+            Arrow("a1", ((1,0),), Direction.RIGHT),
+            Arrow("a2", ((2,0),), Direction.UP),
+        )))
+        app.play_arrow("a0")
+        await step(app, pilot, clock, .15)
+        app.play_arrow("a1")
+        await step(app, pilot, clock, .2)
+        assert game.session.lives == 1
+        hearts = app.effects.heart_frames
+        assert set(hearts) == {1, 2} and hearts[2] > 0 > hearts[1]
+        arrows = app.effects.animations
+        assert len(arrows) == 2 and arrows[0].progress > arrows[1].progress
+        remaining = game.seconds_left
+        app.action_menu()
+        await pilot.pause()
+        await step(app, pilot, clock, 100)
+        assert app.effects.heart_frames == hearts and app.effects.animations == arrows
+        assert game.seconds_left == remaining
+        app.dispatch("resume")
+        await pilot.pause()
+        await step(app, pilot, clock, .2)
+        assert all(app.effects.heart_frames[i] > hearts[i] for i in hearts)
+        await finish(app, pilot, clock)
+        assert not app.effects.active and app.page == "game"
+
+
+async def test_life_failure_waits_for_shatter_after_collision_motion_ends(tmp_path):
+    clock = Clock()
+    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, "endless", blocked=True)
+        assert game.session.lives == 1
+        app.play_arrow("a0")
+        assert game.outcome == "lost" and game.failure_reason == "lives"
+        await step(app, pilot, clock, .96)
+        assert not app.effects.animations and app.effects.heart_frames
+        assert app.page == "game" and not game.counted
+        await finish(app, pilot, clock)
+        assert not app.effects.active and app.page == "result" and game.counted
+
+
+async def test_last_arrow_waits_for_all_inflight_visuals_before_result(tmp_path):
+    clock = Clock()
+    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    async with app.run_test(size=(106, 30)) as pilot:
+        game = await install(app, pilot, count=2, blocked=True)
+        app.play_arrow("a0")
+        app.play_arrow("a1")
+        await step(app, pilot, clock, .96)
+        assert not app.effects.animations and app.effects.heart_frames
+        app.play_arrow("a0")
+        assert game.outcome == "level_won" and app.effects.animations and app.effects.heart_frames
+        await step(app, pilot, clock, .64)
+        assert app.page == "game" and not game.counted and app.effects.active
+        await finish(app, pilot, clock)
+        assert app.page == "result" and game.counted and not app.effects.active
