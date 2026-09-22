@@ -421,9 +421,6 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.app.dispatch("resume")
             await pilot.pause()
-            self.assertIsInstance(self.app.screen, SettingsPage)
-            self.app.dispatch("back")
-            await pilot.pause()
             self.assertIsInstance(self.app.screen, GamePage)
             self.clock.value += 0.5
             self.app.tick()
@@ -563,6 +560,77 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(self.app.store.load_slot(0).session.lives, 0)
             self.app.request_desktop_exit()
             self.assertEqual(path.read_bytes(), before)
+
+    async def test_real_tooltips_cover_native_icons_at_button_edges(self):
+        from textual.geometry import Region
+        from textual.widgets import Tooltip
+        from .desktop import compose_frame, configure_native_colors, _rasterize_strips
+        from .fonts import glyph_mask
+        configure_native_colors(self.app)
+        self.app.TOOLTIP_DELAY = .01
+        async with self.app.run_test(size=(106, 30), tooltips=True) as pilot:
+            for button_id in ("exit-desktop", "github"):
+                for offset_x in (0, 1, 3):
+                    with self.subTest(button=button_id, offset=offset_x):
+                        await pilot.hover("#home-title")
+                        await pilot.pause()
+                        await pilot.hover("#" + button_id, offset=(offset_x, 1))
+                        await pilot.pause(.06)
+                        tooltip = self.app.screen.query_one("#textual-tooltip", Tooltip)
+                        button = self.app.screen.query_one("#" + button_id)
+                        self.assertTrue(tooltip.display)
+                        region = tooltip.region
+                        self.assertTrue(region.overlaps(button.region))
+                        frame = compose_frame(self.app, (640, 360))
+                        expected = _rasterize_strips(
+                            tooltip.render_lines(Region(0, 0, region.width, region.height)),
+                            (region.width * 6, region.height * 12),
+                        )
+                        actual = frame.crop((region.x * 6, region.y * 12,
+                                             region.right * 6, region.bottom * 12))
+                        self.assertEqual(actual.tobytes(), expected.tobytes())
+                        # Check the first Chinese glyph itself as well, so a
+                        # clipped CJK title cannot pass with a matching blank.
+                        title = "项" if button_id == "github" else "退"
+                        x0 = tooltip.content_region.x * 6 + (54 if button_id == "github" else 0)
+                        y0 = tooltip.content_region.y * 12
+                        ink = glyph_mask(title)
+                        for y in range(ink.height):
+                            for x in range(ink.width):
+                                if ink.getpixel((x, y)):
+                                    self.assertNotEqual(frame.getpixel((x0 + x, y0 + y)),
+                                                        tooltip.styles.background.rgb)
+
+    async def test_expanded_select_has_pixel_outline_green_options_and_keyboard_selection(self):
+        from .desktop import compose_frame, configure_native_colors
+        from .widgets import PixelSelect
+        from .pixels import BACKGROUND
+        app = self.app
+        configure_native_colors(app)
+        async with app.run_test(size=(106, 30)) as pilot:
+            app.settings_section = 'video'
+            app.route('settings')
+            await pilot.pause()
+            await pilot.click('#cfg-resolution', offset=(2, 1))
+            await pilot.pause()
+            select = app.screen.query_one('#cfg-resolution', PixelSelect)
+            overlay = select.query_one('SelectOverlay')
+            self.assertTrue(select.expanded and overlay.native_full_region)
+            r = overlay.region
+            frame = compose_frame(app, (640, 360))
+            crop = frame.crop((r.x * 6, r.y * 12, r.right * 6, r.bottom * 12))
+            line = overlay.styles.border_top[1].rgb
+            fill = overlay.styles.background.rgb
+            self.assertTrue(all((crop.getpixel((x, 6)) == line and crop.getpixel((x, crop.height - 7)) == line for x in range(crop.width))))
+            self.assertTrue(all((crop.getpixel((0, y)) == line and crop.getpixel((crop.width - 1, y)) == line for y in range(6, crop.height - 6))))
+            self.assertTrue(all((crop.getpixel((x, y)) == BACKGROUND for x in range(crop.width) for y in list(range(6)) + list(range(crop.height - 6, crop.height)))))
+            self.assertTrue(all((crop.getpixel((x, 7)) == fill and crop.getpixel((x, crop.height - 8)) == fill for x in range(1, crop.width - 1))))
+            colors = set(crop.get_flattened_data())
+            self.assertTrue((28, 48, 40) in colors and (114, 214, 156) in colors)
+            self.assertTrue((1, 120, 212) not in colors)
+            await pilot.press('down', 'enter')
+            await pilot.pause()
+            self.assertTrue(not select.expanded and select.value == '1920x1080')
 
     async def test_native_host_exports_integer_scaled_frame(self):
         from PIL import Image, ImageChops

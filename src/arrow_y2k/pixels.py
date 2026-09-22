@@ -13,6 +13,7 @@ from math import cos, floor, pi, sin
 from typing import TYPE_CHECKING, Iterable, Mapping
 
 from PIL import Image, ImageDraw
+from .palette import rgb
 
 if TYPE_CHECKING:
     from .model import Arrow, Board
@@ -22,16 +23,16 @@ RGB = tuple[int, int, int]
 CELL_PIXELS = 15
 STRIDE = CELL_PIXELS + 1
 MAX_ART_SCALE = 2
-BACKGROUND: RGB = (16, 23, 27)
-TILE: RGB = (20, 29, 34)
-GRID: RGB = (167, 184, 182)
-WHITE: RGB = (239, 246, 232)
-MINT: RGB = (114, 214, 156)
-RED: RGB = (217, 107, 158)
-HEART_RED: RGB = (204, 67, 95)
-HEART_SHADOW: RGB = (117, 45, 66)
-HEART_LIGHT: RGB = (246, 157, 171)
-MUTED: RGB = (46, 62, 67)
+BACKGROUND: RGB = rgb("surface")
+TILE: RGB = rgb("board-tile")
+GRID: RGB = rgb("board-grid")
+WHITE: RGB = rgb("ink")
+MINT: RGB = rgb("accent")
+RED: RGB = rgb("collision")
+HEART_RED: RGB = rgb("heart")
+HEART_SHADOW: RGB = rgb("heart-shadow")
+HEART_LIGHT: RGB = rgb("heart-light")
+MUTED: RGB = rgb("board-muted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,7 +415,7 @@ def render_mask_editor(
             ox, oy = x * STRIDE, y * STRIDE
             selected = (x, y) in active
             if selected:
-                draw.rectangle((ox + 1, oy + 1, ox + 15, oy + 15), fill=(37, 66, 54))
+                draw.rectangle((ox + 1, oy + 1, ox + 15, oy + 15), fill=rgb("board-selected"))
             for step in range(0, STRIDE + 1, 4):
                 color = GRID if selected else MUTED
                 for point in ((ox + step, oy), (ox + step, oy + STRIDE),

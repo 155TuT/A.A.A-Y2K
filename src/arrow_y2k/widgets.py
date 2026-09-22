@@ -3,15 +3,16 @@ from PIL import Image, ImageDraw
 from rich.text import Text
 from rich.cells import cell_len
 from textual.widgets import Button, Select, Static
+from textual.containers import Horizontal
+from textual.geometry import Region
 from .icons import pixel_icon
+from .palette import rgb
 from textual import events
 from textual.widget import Widget
 from .pixels import (render_board, render_hearts, render_mask_editor, hit_test,
                      board_metrics, Animation, BACKGROUND, MINT)
 from .fonts import draw_text
 from .canvas import CANVAS_WIDTH as EDITOR_WIDTH, CANVAS_HEIGHT as EDITOR_HEIGHT
-
-
 
 
 class RasterView(Widget):
@@ -23,8 +24,54 @@ class RasterView(Widget):
         return Text("")
 
 
+def text_art(label, color):
+    """Visible glyph bounds, independent of the font's baseline padding."""
+    frame = Image.new("RGBA", (max(1, cell_len(label) * 6), 12))
+    draw_text(frame, (0, 0), label, color)
+    bounds = frame.getbbox()
+    return frame.crop(bounds) if bounds else Image.new("RGBA", (0, 0))
+
+
+
+def rectangle_face(widget, width, height):
+    """One outline/background policy for all native interactive controls."""
+    frame = Image.new("RGB", (width, height), BACKGROUND)
+    inset = min(6, max(0, (height - 20) // 2))
+    ImageDraw.Draw(frame).rectangle((0, inset, width - 1, height - inset - 1),
+                                   fill=widget.styles.background.rgb,
+                                   outline=widget.styles.border_top[1].rgb)
+    return frame
+
+
+class ControlFace:
+    """Compose pixel chrome around Textual's unchanged cursor/text/slider."""
+    def __init__(self, widget):
+        self.widget = widget
+
+    def __call__(self, width, height):
+        from .desktop import _rasterize_strips
+        widget = self.widget
+        frame = rectangle_face(widget, width, height)
+        region = widget.region
+        content = widget.content_region
+        lines = widget.render_lines(Region(0, 0, region.width, region.height))
+        surface = _rasterize_strips(lines, (width, height))
+        left = (content.x - region.x) * 6
+        top = (content.y - region.y) * 12
+        bounds = (left, top, left + content.width * 6, top + content.height * 12)
+        frame.paste(surface.crop(bounds), (left, top))
+        return frame
+
+
+def attach_control_face(widget):
+    widget.native_full_region = True
+    widget.native_frame = ControlFace(widget)
+
+
 class PixelButton(Button):
-    """Textual keeps input and accessibility; a sprite decorates its content."""
+    """Keep Textual input/focus; compose one pixel-exact button face."""
+    native_full_region = True
+
     def __init__(self, label, *, icon=None, icon_only=False, **kwargs):
         super().__init__(label, **kwargs)
         self.icon = icon
@@ -35,22 +82,58 @@ class PixelButton(Button):
             self.tooltip = label
 
     def native_frame(self, width, height):
-        background = self.styles.background.rgb
-        frame = Image.new("RGB", (width, height), background)
+        # Vertical layout gutters stay page-colored. Hover only fills the
+        # interior of the actual outline, equally inset by one source pixel.
+        frame = rectangle_face(self, width, height)
+        draw = ImageDraw.Draw(frame)
         label = "" if self.icon_only else self.label.plain
-        label_width = cell_len(label) * 6
-        art_width = 12 if self.icon else 0
-        gap = 6 if self.icon and label else 0
-        left = max(0, (width - label_width - art_width - gap) // 2)
-        top = max(0, (height - 12) // 2)
-        if self.icon:
-            art = pixel_icon(self.icon)
-            frame.paste(art, (left, top), art)
-        draw_text(frame, (left + art_width + gap, top), label, self.styles.color.rgb)
+        text = text_art(label, self.styles.color.rgb)
+        art = pixel_icon(self.icon) if self.icon else None
+        if art is not None:
+            art = art.crop(art.getbbox())
+        gap = 6 if art is not None and label else 0
+        group_width = text.width + (art.width if art else 0) + gap
+        left = (width - group_width) // 2
+        if art is not None:
+            frame.paste(art, (left, (height - art.height) // 2), art)
+            left += art.width + gap
+        if label:
+            frame.paste(text, (left, (height - text.height) // 2), text)
+        if self.has_class("header-home"):
+            draw.line((0, height - 1, width - 1, height - 1), fill=rgb("border-separator"))
         return frame
 
     def render(self):
         return Text("")
+
+
+class HeaderTitle(RasterView):
+    def __init__(self, title, **kwargs):
+        super().__init__(**kwargs)
+        self.title = title
+
+    def native_frame(self, width, height):
+        frame = Image.new("RGB", (width, height), BACKGROUND)
+        art = text_art(self.title, MINT)
+        frame.paste(art, (0, (height - art.height) // 2), art)
+        ImageDraw.Draw(frame).line((0, height - 1, width - 1, height - 1), fill=rgb("border-separator"))
+        return frame
+
+
+class PageHeader(Horizontal):
+    """One shared, compact home action and vertically centered page title."""
+    def __init__(self, title):
+        super().__init__(classes="page-header")
+        self.title = title
+
+    def compose(self):
+        yield HeaderTitle(self.title, classes="page-title")
+        yield PixelButton("返回主页", icon="exit", classes="danger header-home", id="go-home")
+
+    def native_frame(self, width, height):
+        frame = Image.new("RGB", (width, height), BACKGROUND)
+        ImageDraw.Draw(frame).line((0, height - 1, width - 1, height - 1), fill=rgb("border-separator"))
+        return frame
 
 
 class DisclosureArt:
@@ -59,7 +142,7 @@ class DisclosureArt:
         self.widget = widget
 
     def __call__(self, width, height):
-        frame = Image.new("RGB", (width, height), (21, 35, 29))
+        frame = Image.new("RGB", (width, height), rgb("surface-field"))
         draw = ImageDraw.Draw(frame)
         center = height // 2
         for x in (width // 2 - 6, width // 2, width // 2 + 6):
@@ -70,6 +153,8 @@ class DisclosureArt:
 class PixelSelect(Select):
     """Keep Select's keyboard/popup behavior, replace only its disclosure glyph."""
     def on_mount(self):
+        for current in self.query("SelectCurrent, SelectOverlay"):
+            attach_control_face(current)
         for arrow in self.query(".arrow"):
             arrow.update("•••")
             arrow.native_frame = DisclosureArt(arrow)
@@ -83,14 +168,13 @@ class CreditsView(RasterView):
         frame = Image.new("RGB", (width, height), BACKGROUND)
         left = max(0, (width - (len(self.PREFIX + self.SUFFIX) * 6 + 13)) // 2)
         top = max(0, (height - 12) // 2)
-        color = (102, 132, 116)
+        color = rgb("text-credit")
         draw_text(frame, (left, top), self.PREFIX, color)
         left += len(self.PREFIX) * 6
         heart = pixel_icon("heart")
         frame.paste(heart, (left, top), heart)
         draw_text(frame, (left + heart.width, top), self.SUFFIX, color)
         return frame
-
 
 
 class TitleView(RasterView):
@@ -104,7 +188,6 @@ class TitleView(RasterView):
         frame = Image.new("RGB", (width, height), BACKGROUND)
         frame.paste(image, ((width - image.width) // 2, (height - image.height) // 2))
         return frame
-
 
 
 class BoardView(RasterView):
@@ -134,7 +217,6 @@ class BoardView(RasterView):
         return render_board(app.session.current_board, size=(width, height), hovered=app.hovered,
                             hint=app.hint_id, animations=animations,
                             cursor=app.cursor if self.has_focus else None, red_ids=app.failed_ids)
-
 
     def cell_at(self, event):
         x = round(event.pointer_screen_x * 6) - self.content_region.x * 6
@@ -216,7 +298,6 @@ class SaveHearts(RasterView):
         left = max(0, (width - image.width) // 2) if self.centered else 0
         frame.paste(image, (left, max(0, (height - image.height) // 2)))
         return frame
-
 
 
 class HeartsView(SaveHearts):

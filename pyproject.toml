@@ -17,7 +17,7 @@ build = ["pyinstaller>=6.16,<7"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-arrow_y2k = ["*.tcss", "assets/fonts/*"]
+arrow_y2k = ["*.tcss", "assets/fonts/*", "assets/icons/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

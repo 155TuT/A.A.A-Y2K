@@ -173,7 +173,7 @@ async def test_manual_slots_restore_exact_state_and_autosave_does_not_overwrite_
         await click(pilot, "#cfg-autosave")
         await click(pilot, "#apply-settings")
         assert app.store.settings.autosave is False
-        await click(pilot, "#back")
+        await pilot.press("escape")
         await click(pilot, "#resume")
         await advance(app, clock, pilot, 181)
         assert app.store.load_slot(0).to_dict() == automatic
@@ -285,7 +285,7 @@ async def test_new_achievement_is_persisted_and_toast_stays_off_board(tmp_path):
 
 
 @pytest.mark.parametrize("size", [(85, 32), (106, 30)])
-async def test_all_pages_and_settings_fit_and_escape_to_menu(tmp_path, size):
+async def test_all_pages_and_settings_fit_and_escape_navigation(tmp_path, size):
     app, clock = make_app(tmp_path)
     async with app.run_test(size=size) as pilot:
         await start(pilot)
@@ -297,7 +297,7 @@ async def test_all_pages_and_settings_fit_and_escape_to_menu(tmp_path, size):
             await pilot.press("escape")
             assert app.page == "menu", page
             visible_controls_fit(app)
-            await click(pilot, "#resume")
+            await pilot.press("escape")
             assert app.page == page
         for section in ("basic", "audio", "video", "about"):
             app.settings_section = section

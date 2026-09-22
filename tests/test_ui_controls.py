@@ -45,8 +45,8 @@ async def test_home_alignment_square_exit_and_icons_fit_each_resolution(tmp_path
             assert (button.region.x, button.region.right) == (menu.region.x, menu.region.right)
         exit_button = app.q("#exit-desktop", PixelButton)
         github = app.q("#github", PixelButton)
-        assert exit_button.region.x == menu.region.x
-        assert github.region.right == menu.region.right
+        assert github.region.x == menu.region.x
+        assert exit_button.region.right == menu.region.right
         assert exit_button.tooltip == "退出到桌面" and github.tooltip == "GitHub / 项目主页"
         assert app.focused is None
         frame = compose_frame(app, preset.logical_size)
@@ -137,3 +137,168 @@ async def test_game_text_selection_is_disabled_without_disabling_inputs(tmp_path
         field.focus()
         await pilot.press("ctrl+shift+a", "5")
         assert field.value == "5"
+
+
+@pytest.mark.parametrize("button_id", ["exit-desktop", "github", "open-settings"])
+async def test_hover_fill_stays_inside_outline_and_content_is_centered(tmp_path, button_id):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        await pilot.hover("#" + button_id, offset=(1, 1))
+        await pilot.pause()
+        button = app.q("#" + button_id, PixelButton)
+        frame = compose_frame(app, (640, 360))
+        r = button.region
+        face = frame.crop((r.x * 6, r.y * 12, r.right * 6, r.bottom * 12))
+        outline = button.styles.border_top[1].rgb
+        fill = button.styles.background.rgb
+        assert fill != BACKGROUND
+        points = [(x, y) for y in range(face.height) for x in range(face.width)
+                  if face.getpixel((x, y)) == outline]
+        x0, x1 = min(x for x, y in points), max(x for x, y in points)
+        y0, y1 = min(y for x, y in points), max(y for x, y in points)
+        assert all(face.getpixel((x, y0)) == outline and face.getpixel((x, y1)) == outline
+                   for x in range(x0, x1 + 1))
+        assert all(face.getpixel((x0, y)) == outline and face.getpixel((x1, y)) == outline
+                   for y in range(y0, y1 + 1))
+        # No hover rectangle may spill outside the outline. The one-pixel
+        # interior ring has the same hover fill on all four sides.
+        assert all(face.getpixel((x, y)) != fill for y in range(face.height)
+                   for x in range(face.width) if x <= x0 or x >= x1 or y <= y0 or y >= y1)
+        assert all(face.getpixel((x, y0 + 1)) == fill and face.getpixel((x, y1 - 1)) == fill
+                   for x in range(x0 + 1, x1))
+        assert all(face.getpixel((x0 + 1, y)) == fill and face.getpixel((x1 - 1, y)) == fill
+                   for y in range(y0 + 1, y1))
+        ink = [(x, y) for y in range(y0 + 1, y1) for x in range(x0 + 1, x1)
+               if face.getpixel((x, y)) != fill]
+        xs, ys = zip(*ink)
+        assert abs(min(xs) + max(xs) - (x0 + x1)) <= 1
+        assert abs(min(ys) + max(ys) - (y0 + y1)) <= 1
+
+
+@pytest.mark.parametrize("resolution", list(RESOLUTIONS))
+@pytest.mark.parametrize("page", ["difficulty", "settings", "achievements", "saves", "editor", "menu", "result"])
+async def test_every_secondary_page_has_one_compact_header_home_action(tmp_path, page, resolution):
+    app = make_app(tmp_path)
+    preset = RESOLUTIONS[resolution]
+    async with app.run_test(size=preset.terminal_size) as pilot:
+        if page == "result":
+            app.start_game("easy")
+            await pilot.pause()
+        app.route(page)
+        await pilot.pause()
+        buttons = list(app.screen.query("#go-home"))
+        assert len(buttons) == 1
+        button = buttons[0]
+        assert button.label.plain == "返回主页"
+        assert button.parent.has_class("page-header")
+        assert (button.region.x, button.region.y, button.region.width, button.region.height) == (app.size.width - 14, 0, 13, 3)
+        assert not list(app.screen.query("#back"))
+        title = app.screen.query_one(".page-title")
+        assert title.region.x == 1 and title.region.right < button.region.x
+        frame = compose_frame(app, preset.logical_size)
+        r = title.region
+        crop = frame.crop((r.x * 6, r.y * 12, r.right * 6, r.bottom * 12))
+        # Use the renderer's semantic mint instead of the border's dark green.
+        from arrow_y2k.pixels import MINT
+        text_ys = [y for y in range(crop.height - 1) for x in range(crop.width)
+                   if crop.getpixel((x, y)) == MINT]
+        assert text_ys
+        assert all(frame.getpixel((x, 35)) == (48, 73, 59)
+                   for x in range(app.size.width * 6))
+        assert abs(min(text_ys) - ((crop.height - 1) - max(text_ys))) <= 1
+        await pilot.click("#go-home", offset=(2, 1))
+        await pilot.pause()
+        assert app.page == "home"
+
+
+async def test_about_reuses_official_github_icon_button(tmp_path):
+    from hashlib import sha256
+    from pathlib import Path
+    import arrow_y2k.icons as icons
+    source = Path(icons.__file__).parent / "assets" / "icons" / "github-invertocat-white.png"
+    assert sha256(source.read_bytes()).hexdigest() == "0d4c235fef9efec54174a7c005fc0fe0ce2d63d35c21898ab5148587111397a9"
+    app = make_app(tmp_path)
+    actions = []
+    app.host_action = actions.append
+    async with app.run_test(size=(106, 30)) as pilot:
+        home_button = app.q("#github", PixelButton)
+        home_art = home_button.native_frame(home_button.region.width * 6, home_button.region.height * 12)
+        app.route("settings")
+        await pilot.pause()
+        app.dispatch("settings-about")
+        await pilot.pause()
+        about_button = app.q("#github", PixelButton)
+        about_art = about_button.native_frame(about_button.region.width * 6, about_button.region.height * 12)
+        assert about_button.icon_only and about_button.icon == "github"
+        assert ImageChops.difference(home_art, about_art).getbbox() is None
+        await pilot.click("#github", offset=(1, 1))
+        await pilot.pause()
+        assert actions == ["open_url"]
+
+
+@pytest.mark.parametrize("kind", ["input", "switch", "select"])
+async def test_native_settings_chrome_keeps_background_inside_all_four_edges(tmp_path, kind):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.route("settings")
+        await pilot.pause()
+        if kind == "select":
+            app.dispatch("settings-video")
+            await pilot.pause()
+            control = app.screen.query_one("SelectCurrent")
+            app.screen.query_one("#cfg-resolution").focus()
+        else:
+            control = app.screen.query_one("#cfg-save-minutes" if kind == "input" else "#cfg-autosave")
+            control.focus()
+        await pilot.pause()
+        frame = compose_frame(app, (640, 360))
+        r = control.region
+        crop = frame.crop((r.x * 6, r.y * 12, r.right * 6, r.bottom * 12))
+        line = control.styles.border_top[1].rgb
+        fill = control.styles.background.rgb
+        assert all(crop.getpixel((x, 6)) == line and crop.getpixel((x, crop.height - 7)) == line
+                   for x in range(crop.width))
+        assert all(crop.getpixel((0, y)) == line and crop.getpixel((crop.width - 1, y)) == line
+                   for y in range(6, crop.height - 6))
+        assert all(crop.getpixel((x, y)) == BACKGROUND for x in range(crop.width)
+                   for y in list(range(6)) + list(range(crop.height - 6, crop.height)))
+        assert all(crop.getpixel((x, 7)) == fill and crop.getpixel((x, crop.height - 8)) == fill
+                   for x in range(1, crop.width - 1))
+
+
+
+def test_official_github_raster_retains_two_separate_ear_cutouts():
+    from itertools import groupby
+    alpha = pixel_icon("github").getchannel("A")
+    assert alpha.size == (20, 19)
+    ear_rows = []
+    for y in range(alpha.height // 2):
+        filled = [x for x in range(alpha.width) if alpha.getpixel((x, y))]
+        if not filled:
+            continue
+        interior = range(min(filled), max(filled) + 1)
+        holes = [list(group) for covered, group in groupby(interior, lambda x: bool(alpha.getpixel((x, y))))
+                 if not covered]
+        if len(holes) == 2 and min(map(len, holes)) >= 2:
+            # Both ear tips extend above the connected transparent head.
+            ear_rows.append(all(alpha.getpixel((x, y + 1)) == 0
+                                for x in range(holes[0][0], holes[1][-1] + 1)))
+    assert any(ear_rows)
+
+
+async def test_minimize_uses_shared_yellow_action_style(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(106, 30)) as pilot:
+        app.route("menu")
+        await pilot.pause()
+        button = app.screen.query_one("#minimize", PixelButton)
+        assert button.has_class("warning")
+        assert button.styles.border_top[1].rgb == (210, 188, 111)
+        await pilot.hover("#minimize", offset=(2, 1))
+        await pilot.pause()
+        assert button.styles.border_top[1].rgb == (246, 224, 153)
+        assert button.styles.background.rgb == (57, 51, 35)
+        await pilot.hover(".page-title")
+        await pilot.pause()
+        assert button.styles.border_top[1].rgb == (210, 188, 111)
+        assert button.styles.background.rgb == BACKGROUND

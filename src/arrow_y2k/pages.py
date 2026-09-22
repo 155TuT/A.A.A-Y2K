@@ -1,9 +1,12 @@
-"""Page inheritance supplies consistent navigation without duplicating game rules."""
+"""Page composition supplies consistent navigation without duplicating game rules."""
 from textual.app import ComposeResult
+from .palette import TOKENS
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical, VerticalScroll, Center
-from textual.widgets import Button, Static, Input, Select, Switch
-from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton, PixelSelect
+from textual.widgets import Static, Input, Select, Switch
+from .widgets import BoardView, HeartsView, SaveHearts, TitleView, CreditsView, PixelButton, PixelSelect, PageHeader, attach_control_face
+
+Button = PixelButton
 
 MODE_NAMES = {"easy": "简单", "medium": "中等", "hard": "困难", "endless": "无尽"}
 
@@ -13,7 +16,7 @@ class Page(Screen):
     AUTO_FOCUS = ""
     ALLOW_SELECT = False
     def header(self, title):
-        return Static(title, classes="page-header")
+        return PageHeader(title)
 
     def toast(self):
         toast = Static("", id="achievement-toast")
@@ -27,6 +30,8 @@ class Page(Screen):
         self.app.dispatch(str(event.button.id))
 
     def on_mount(self):
+        for control in self.query("Input, Switch"):
+            attach_control_face(control)
         for button in self.query(Button):
             button.active_effect_duration = 0
         self.call_after_refresh(self.app.page_ready)
@@ -44,9 +49,9 @@ class HomePage(Page):
                 yield PixelButton("地图创作", icon="map", id="open-editor")
                 yield PixelButton("设置", icon="gear", id="open-settings")
                 with Horizontal(id="home-links"):
-                    yield PixelButton("退出到桌面", icon="exit", icon_only=True, id="exit-desktop", classes="danger")
-                    yield Static("", id="home-links-space")
                     yield PixelButton("GitHub / 项目主页", icon="github", icon_only=True, id="github")
+                    yield Static("", id="home-links-space")
+                    yield PixelButton("退出到桌面", icon="exit", icon_only=True, id="exit-desktop", classes="danger")
         yield CreditsView(classes="home-foot")
         yield self.toast()
 
@@ -62,7 +67,6 @@ class DifficultyPage(Page):
                     yield Button(name if unlocked else name + " / 尚未解锁",
                                  id="start-" + key, disabled=not unlocked)
                 yield Static("所有模式从第 1 关编号开始。\n简单过第 3 关转中等；中等过第 10 关转困难。\n中等 04:00 / 困难 02:00 / 无尽 00:30\n碰撞扣时：中等 10 秒；困难 / 无尽 20 秒。\n无尽 1 颗心起步，过关 +1，最多 3 颗。", classes="mode-help")
-                yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -93,11 +97,10 @@ class PausePage(Page):
         yield self.header("PAUSED / 菜单")
         with Center():
             with Vertical(classes="center-menu"):
-                yield Button("继续", id="resume", classes="primary")
+                yield Button("继续游戏" if self.app.game is not None else "继续", id="resume", classes="primary")
                 yield Button("读取存档 / 手动保存", id="open-saves")
                 yield Button("设置", id="open-settings")
-                yield Button("最小化", id="minimize")
-                yield PixelButton("退出到主页", icon="exit", classes="danger", id="go-home")
+                yield Button("最小化", id="minimize", classes="warning")
                 yield PixelButton("退出到桌面", icon="exit", classes="danger", id="exit-desktop")
                 yield Static("计时已暂停。\n手动保存可随时使用；自动保存遵循基本设置。", classes="mode-help")
         yield self.toast()
@@ -119,7 +122,6 @@ class ResultPage(Page):
                 if lost or game.custom:
                     yield Button("再试一次", id="restart", classes="primary")
                 yield Button("读取存档 / 手动保存", id="open-saves")
-                yield PixelButton("退出到主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -143,7 +145,6 @@ class SavePage(Page):
                     yield Button("删除", id=f"delete-slot-{index}", disabled=summary is None)
                 else:
                     yield Static("自动覆写", classes="auto-badge")
-        yield Button("返回", id="back")
         yield self.toast()
 
 
@@ -186,11 +187,10 @@ class SettingsPage(Page):
                     from . import __version__
                     yield Static(f"ARROW.AFTER.ARROW-Y2K\n版本 {__version__}\nPython / Textual / pygame-ce\n\nFusion Pixel 等宽字体 / SIL OFL 1.1", classes="about-copy")
                     yield Static(str(self.app.store.root), markup=False, classes="data-path")
-                    yield Button("GitHub / 项目主页", id="github")
+                    yield PixelButton("GitHub / 项目主页", icon="github", icon_only=True, id="github")
                 yield Static("", id="settings-status")
                 if section != "about":
                     yield Button("应用并保存", id="apply-settings", classes="primary")
-                yield Button("返回", id="back")
         yield self.toast()
 
 
@@ -202,9 +202,8 @@ class AchievementsPage(Page):
         yield Static(f"已移动 {p.total_arrows} 支箭头   /   最高连续通关 {p.best_streak}\n无尽最快完成：{fastest}", classes="record-stats")
         with VerticalScroll(id="achievement-list"):
             for achievement in self.app.achievements.list_all():
-                mark = "[#72d69c]已达成[/]" if achievement.unlocked else "[#62796c]未达成[/]"
+                mark = f"[{TOKENS['accent']}]已达成[/]" if achievement.unlocked else f"[{TOKENS['text-muted']}]未达成[/]"
                 yield Static(f"{mark}  {achievement.title}\n    {achievement.description}", classes="achievement-row")
-        yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 
@@ -238,7 +237,6 @@ class EditorPage(Page):
                     yield Button("导入", id="editor-import")
                     yield Button("清空", id="editor-clear")
                     yield Button("试玩", id="editor-play", classes="primary")
-                yield PixelButton("返回主页", icon="exit", classes="danger", id="go-home")
         yield self.toast()
 
 

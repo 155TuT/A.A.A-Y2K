@@ -1,26 +1,30 @@
-Screen { background: #10171b; color: #cfdbd4; layers: base overlay; }
-Page { background: #10171b; }
-Button { background: #10171b; color: #b9c9c0; border: solid #425f50; min-width: 8; height: 3; padding: 0; content-align: center middle; text-style: none; }
+Screen { background: $aaa-surface; color: $aaa-text; layers: base overlay; }
+Page { background: $aaa-surface; }
+Button { background: $aaa-surface; color: $aaa-text-control; border: solid $aaa-border; min-width: 8; height: 3; padding: 0; content-align: center middle; text-style: none; }
 Button { background-tint: transparent; tint: transparent; }
-Button:focus { background: #10171b; color: #cfdbd4; border: solid #7d998a; text-style: none; background-tint: transparent; }
-Button:hover { background: #1c3028; color: #72d69c; border: solid #72d69c; text-style: none; }
+Button:focus { background: $aaa-surface; color: $aaa-text; border: solid $aaa-border-focus; text-style: none; background-tint: transparent; }
+Button:hover { background: $aaa-surface-hover; color: $aaa-accent; border: solid $aaa-accent; text-style: none; }
 Button.-active { tint: transparent; background-tint: transparent; }
-Button.danger, Button.danger:focus { color: #eef4e9; border: solid #c96579; }
-Button.danger:hover { background: #3a232c; color: #eef4e9; border: solid #f07b90; }
-Button:disabled { color: #455950; border: solid #2b3d33; background: #10171b; }
-Button.primary, Button.selected { color: #72d69c; border: solid #72d69c; }
-Button.subtle { border: none; color: #688f7a; }
-Input { background: #15231d; color: #cfdbd4; border: solid #425f50; height: 3; padding: 0 1; }
-Input:focus { border: solid #72d69c; }
+Button.danger, Button.danger:focus { color: $aaa-text-strong; border: solid $aaa-danger; }
+Button.danger:hover { background: $aaa-surface-danger; color: $aaa-text-strong; border: solid $aaa-danger-hover; }
+Button.warning, Button.warning:focus { color: $aaa-warning-light; border: solid $aaa-warning; }
+Button.warning:hover { background: $aaa-surface-warning; color: $aaa-warning-light; border: solid $aaa-warning-light; }
+Button:disabled { color: $aaa-text-disabled; border: solid $aaa-border-disabled; background: $aaa-surface; }
+Button.primary, Button.selected { color: $aaa-accent; border: solid $aaa-accent; }
+Button.subtle { border: none; color: $aaa-text-subtle; }
+Input { background: $aaa-surface-field; color: $aaa-text; border: solid $aaa-border; height: 3; padding: 0 1; }
+Input:focus { border: solid $aaa-accent; }
 Select { height: 3; }
-SelectCurrent { background: #15231d; border: solid #425f50; padding: 0; }
-SelectOverlay { background: #15231d; border: solid #72d69c; color: #cfdbd4; }
-.page-header { height: 2; color: #72d69c; border-bottom: solid #30493b; padding: 0 2; }
+SelectCurrent { background: $aaa-surface-field; border: solid $aaa-border; padding: 0; }
+SelectOverlay { background: $aaa-surface-field; border: solid $aaa-accent; color: $aaa-text; }
+.page-header { height: 3; padding: 0; }
+.page-header #go-home { width: 13; min-width: 13; height: 3; margin: 0 1; }
+.page-title { width: 1fr; height: 3; margin-left: 1; }
 Center { height: 1fr; }
 .center-menu { width: 52; height: auto; padding: 1 0; }
 .center-menu Button { width: 100%; }
-.section-title { height: 2; color: #72d69c; text-align: center; }
-.mode-help { height: auto; min-height: 3; margin-top: 1; color: #789886; }
+.section-title { height: 2; color: $aaa-accent; text-align: center; }
+.mode-help { height: auto; min-height: 3; margin-top: 1; color: $aaa-text-help; }
 .button-row { height: 3; width: 100%; }
 .button-row Button, .button-row Input { width: 1fr; }
 .button-row Button { margin-right: 0; }
@@ -30,32 +34,32 @@ Center { height: 1fr; }
 #new-game { margin-right: 1; }
 #home-links { height: 3; width: 100%; }
 #home-links-space { width: 1fr; }
-#home-links Button.icon-only { width: 5; min-width: 5; height: 3; }
+Button.icon-only { width: 4; min-width: 4; height: 3; }
+#settings-content > Button.icon-only { width: 4; min-width: 4; }
 #home-menu > Button { width: 100%; }
-.home-foot { height: 2; content-align: center middle; color: #668474; }
+.home-foot { height: 2; content-align: center middle; color: $aaa-text-credit; }
 #game-layout { height: 1fr; margin: 1; }
 #board { width: 1fr; height: 1fr; overflow: hidden; }
-#game-side { width: 26; margin-left: 2; padding-left: 1; border-left: solid #30493b; }
-#level-name { height: 2; color: #c2d5c8; }
-#mode-name { height: 2; color: #688f7a; }
-.eyebrow { height: 1; color: #688f7a; }
+#game-side { width: 26; margin-left: 2; padding-left: 1; border-left: solid $aaa-border-separator; }
+#level-name { height: 2; color: $aaa-text-secondary; }
+#mode-name { height: 2; color: $aaa-text-subtle; }
+.eyebrow { height: 1; color: $aaa-text-subtle; }
 #hearts { height: 4; }
-#stats { height: 2; color: #72d69c; }
-#timer { height: 2; color: #72d69c; text-style: bold; }
-#combo { height: 2; color: #d96b9e; }
+#stats { height: 2; color: $aaa-accent; }
+#timer { height: 2; color: $aaa-accent; text-style: bold; }
+#combo { height: 2; color: $aaa-collision; }
 #status { height: 4; }
 #game-side .button-row Button { min-width: 8; margin-right: 0; }
-#achievement-toast { display: none; layer: overlay; position: absolute; dock: bottom; width: 26; height: auto; min-height: 4; max-height: 7; margin: 0 1 1 0; align-horizontal: right; background: #172a20; color: #adbdaf; border: solid #72d69c; padding: 0 1; }
+#achievement-toast { display: none; layer: overlay; position: absolute; dock: bottom; width: 26; height: auto; min-height: 4; max-height: 7; margin: 0 1 1 0; align-horizontal: right; background: $aaa-surface-toast; color: $aaa-text-toast; border: solid $aaa-accent; padding: 0 1; }
 #achievement-toast.show-toast { display: block; }
-.result-summary { height: auto; min-height: 6; color: #c2d5c8; content-align: center middle; }
+.result-summary { height: auto; min-height: 6; color: $aaa-text-secondary; content-align: center middle; }
 #result-hearts { width: 100%; height: 3; }
-.save-help { height: 2; padding: 0 2; color: #789886; }
-.save-slot { height: 4; margin: 0 2; border-bottom: solid #24392e; }
+.save-help { height: 2; padding: 0 2; color: $aaa-text-help; }
+.save-slot { height: 4; margin: 0 2; border-bottom: solid $aaa-border-row; }
 .save-info { width: 1fr; height: 3; }
 .save-hearts { width: 8; height: 3; margin-right: 1; }
 .save-slot Button { width: 8; min-width: 8; }
-.auto-badge { width: 16; height: 3; content-align: center middle; color: #688f7a; }
-SavePage > Button, AchievementsPage > Button { width: 26; height: 3; margin: 0 2; }
+.auto-badge { width: 16; height: 3; content-align: center middle; color: $aaa-text-subtle; }
 #settings-tabs { height: 3; margin: 0 2; }
 #settings-tabs Button { width: 1fr; }
 #settings-content { width: 60; padding: 1; height: auto; }
@@ -64,28 +68,35 @@ SavePage > Button, AchievementsPage > Button { width: 26; height: 3; margin: 0 2
 .setting-row { height: 3; }
 .setting-row Static { width: 1fr; height: 3; content-align: left middle; }
 .setting-row Switch { width: auto; }
-#settings-status { height: 2; color: #72d69c; }
+#settings-status { height: 2; color: $aaa-accent; }
 .about-copy { height: 8; }
-.data-path { height: 4; color: #789886; }
-.record-stats { height: 3; margin: 1 2 0 2; color: #72d69c; }
+.data-path { height: 4; color: $aaa-text-help; }
+.record-stats { height: 3; margin: 1 2 0 2; color: $aaa-accent; }
 #achievement-list { height: 1fr; margin: 0 2; }
 .achievement-row { height: 3; }
 #editor-layout { height: 1fr; margin: 0 1; }
-#editor-side { width: 26; margin-left: 2; padding-left: 1; border-left: solid #30493b; }
+#editor-side { width: 26; margin-left: 2; padding-left: 1; border-left: solid $aaa-border-separator; }
 #parameters { height: 3; }
 #parameters Input { width: 1fr; padding: 0; }
-#editor-status { height: 1; color: #72d69c; }
+#editor-status { height: 1; color: $aaa-accent; }
 #editor-side > Button { width: 100%; }
 
 #editor-canvas { width: 1fr; height: 1fr; }
 
-Select:focus > SelectCurrent { border: solid #72d69c; background-tint: transparent; }
-SelectCurrent .arrow { width: 3; padding: 0; color: #425f50; }
-Select:focus SelectCurrent .arrow { color: #72d69c; }
-Switch { width: 8; height: 3; padding: 0 1; border: solid #425f50; background: #10171b; background-tint: transparent; }
-Switch:focus { border: solid #7d998a; background: #10171b; background-tint: transparent; }
-Switch:hover { border: solid #72d69c; background: #1c3028; }
-Switch .switch--slider { color: #62796c; background: #20302a; }
-Switch.-on .switch--slider { color: #72d69c; background: #20302a; }
-Switch:hover .switch--slider { color: #8eaa9a; }
-Switch.-on:hover .switch--slider { color: #9ae6b4; }
+Select:focus > SelectCurrent { border: solid $aaa-accent; background-tint: transparent; }
+SelectCurrent .arrow { width: 3; padding: 0; color: $aaa-border; }
+Select:focus SelectCurrent .arrow { color: $aaa-accent; }
+Switch { width: 8; height: 3; padding: 0 1; border: solid $aaa-border; background: $aaa-surface; background-tint: transparent; }
+Switch:focus { border: solid $aaa-border-focus; background: $aaa-surface; background-tint: transparent; }
+Switch:hover { border: solid $aaa-accent; background: $aaa-surface-hover; }
+Switch .switch--slider { color: $aaa-text-muted; background: $aaa-surface-slider; }
+Switch.-on .switch--slider { color: $aaa-accent; background: $aaa-surface-slider; }
+Switch:hover .switch--slider { color: $aaa-slider-hover; }
+Switch.-on:hover .switch--slider { color: $aaa-slider-on-hover; }
+
+SelectOverlay:focus { border: solid $aaa-accent; background-tint: transparent; }
+SelectOverlay > .option-list--option-highlighted,
+SelectOverlay:focus > .option-list--option-highlighted,
+SelectOverlay > .option-list--option-hover {
+    background: $aaa-surface-hover; color: $aaa-accent; text-style: none;
+}

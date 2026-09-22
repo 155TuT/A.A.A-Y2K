@@ -20,8 +20,10 @@ from PIL import Image, ImageDraw
 from rich.cells import cell_len
 from textual import events
 from textual.geometry import Region
+from textual.errors import NoWidget
 
 from .fonts import CELL_HEIGHT, CELL_WIDTH, draw_text
+from .palette import rgb
 from .windowing import DesktopGeometry, choose_work_area, place_window
 
 if TYPE_CHECKING:
@@ -50,8 +52,8 @@ RESOLUTIONS = {
     "1280x720": Resolution(1280, 720, 2),
     "1920x1080": Resolution(1920, 1080, 3),
 }
-BACKGROUND = (11, 14, 22)
-FOREGROUND = (240, 243, 248)
+BACKGROUND = rgb("host-surface")
+FOREGROUND = rgb("host-text")
 PROJECT_URL = "https://github.com/155TuT/arrow-Y2K"
 
 
@@ -106,24 +108,35 @@ def _textual_surface(app: App):
         strips = compositor.render_strips()
         visible = list(compositor.visible_widgets.items())
         overlays = []
+        painted_regions = []
+        # The base strips already contain ordinary controls. Once native art
+        # replaces an area, later widgets that cover it must be restored in
+        # the same painter order, including tooltip / Select popups. Render
+        # their own complete lines so CJK glyphs survive compositor cuts at
+        # the boundary of the underlying native button.
         for widget, (_, clip) in reversed(visible):
+            if not widget.visible:
+                continue
             renderer = getattr(widget, "native_frame", None)
             complete_overlay = getattr(widget, "native_complete_overlay", False)
-            if (renderer is None and not complete_overlay) or not widget.visible:
+            full_region = complete_overlay or getattr(widget, "native_full_region", False)
+            region = widget.region if full_region or renderer is None else widget.content_region
+            visible_region = region.intersection(clip)
+            if not visible_region:
                 continue
-            region = widget.region if complete_overlay else widget.content_region
+            restore_text = renderer is None and (
+                complete_overlay or any(visible_region.overlaps(area) for area in painted_regions)
+            )
+            if renderer is None and not restore_text:
+                continue
             width, height = region.width * CELL_WIDTH, region.height * CELL_HEIGHT
-            if not width or not height:
-                continue
-            if complete_overlay:
-                # Textual's global strips may split a wide CJK glyph at an
-                # underlying widget boundary. Its own full render_lines keep
-                # the glyph intact and preserve Textual's styles and borders.
+            if renderer is not None:
+                art = renderer(width, height)
+            else:
                 lines = widget.render_lines(Region(0, 0, region.width, region.height))
                 art = _rasterize_strips(lines, (width, height))
-            else:
-                art = renderer(width, height)
             overlays.append((region, clip, art))
+            painted_regions.append(visible_region)
     return strips, overlays
 
 
@@ -158,7 +171,9 @@ def compose_frame(app: App, logical_size: tuple[int, int]) -> Image.Image:
 
 The real Textual compositor supplies every ordinary widget. Widgets may expose
 ``native_frame(width, height) -> PIL.Image`` for pixel art inside their content
-region. Only visible widgets are overlaid, clipped to their Textual viewport.
+region, or their full region when ``native_full_region`` is true. Ordinary
+controls covering native art are restored in Textual painter order. All layers
+are clipped to their Textual viewport.
 """
     strips, overlays = _textual_surface(app)
     frame = _rasterize_strips(strips, logical_size)
@@ -253,11 +268,23 @@ class PixelHost:
 
     def _start_drag(self, event, point) -> bool:
         region = getattr(self.app, "window_drag_region", None)
-        if region is None or self._window is None:
+        if point is None or region is None or self._window is None:
             return False
         x, y, width, height = region
         if not (x <= point[0] < x + width and y <= point[1] < y + height):
             return False
+        # A header can contain real controls. Hit-test Textual's topmost
+        # widget (and its parents) before treating the empty/title area as a
+        # window handle, so nested labels and buttons keep their clicks.
+        if self.app.screen_stack:
+            try:
+                widget, _ = self.app.screen.get_widget_at(
+                    point[0] // CELL_WIDTH, point[1] // CELL_HEIGHT)
+            except NoWidget:
+                pass
+            else:
+                if any(getattr(node, "can_focus", False) for node in widget.ancestors_with_self):
+                    return False
         self._reset_pointer()
         self._drag = (self.geometry.global_pointer(), tuple(self._window.position))
         self.geometry.capture_pointer(True)
@@ -303,11 +330,9 @@ class PixelHost:
         # Chinese IME commits. Using both events would duplicate ASCII input.
         if character and not ctrl and not alt:
             return None
-        if ctrl:
-            key = "ctrl+" + key
-            character = None
-        elif alt:
-            key = "alt+" + key
+        if ctrl or alt:
+            modifiers = [name for name, enabled in (("ctrl", ctrl), ("alt", alt), ("shift", shift)) if enabled]
+            key = "+".join((*modifiers, key))
             character = None
         elif shift and (character is None or key == "tab"):
             key = "shift+" + key

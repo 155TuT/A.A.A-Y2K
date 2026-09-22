@@ -20,6 +20,7 @@ from .audio import AudioController
 from .effects import GameplayEffects
 from .solver import solve
 from .pages import PAGES, MODE_NAMES
+from .palette import TOKENS, css_variables
 
 
 class ArrowApp(App):
@@ -47,7 +48,6 @@ class ArrowApp(App):
         self.page = "home"
         self._page_ready = False
         self.paused_page = "home"
-        self.back_page = "home"
         self.settings_section = "basic"
         self.last_tick = self.clock()
         self.autosave_elapsed = 0.0
@@ -73,6 +73,9 @@ class ArrowApp(App):
         self.toast_text = ""
         self.toast_until = 0.0
 
+    def get_css_variables(self):
+        return {**super().get_css_variables(), **css_variables()}
+
     @property
     def session(self):
         return self.game.session if self.game is not None else None
@@ -83,8 +86,10 @@ class ArrowApp(App):
 
     @property
     def window_drag_region(self):
-        # Headers and the game's top margin reserve this whole source-pixel row.
-        return (0, 0, self.size.width * 6, 12)
+        # The host excludes interactive controls inside a draggable header.
+        headers = self.screen.query(".page-header") if self.screen_stack else None
+        height = headers.first().region.height * 12 if headers else 12
+        return (0, 0, self.size.width * 6, height)
 
     def reset_pointer_state(self):
         if not self.screen_stack:
@@ -185,7 +190,7 @@ class ArrowApp(App):
             return
         if self.toast_queue:
             title, description = self.toast_queue.popleft()
-            self.toast_text = f"[#72d69c]{title}[/]\n{description}"
+            self.toast_text = f"[{TOKENS['accent']}]{title}[/]\n{description}"
             self.toast_until = now + 4.0
         else:
             self.toast_text = ""
@@ -250,7 +255,7 @@ class ArrowApp(App):
         if collision:
             penalty = self.game.collision_penalty_seconds
             feedback = f"扣除 {penalty} 秒。" if penalty else "先移除头部射线上的遮挡。"
-            self.message = "[#d96b9e]发生碰撞。[/]\n" + feedback
+            self.message = f"[{TOKENS['collision']}]发生碰撞。[/]\n" + feedback
             self.sound("collision")
         else:
             self.failed_ids.discard(arrow_id)
@@ -508,15 +513,13 @@ class ArrowApp(App):
                 self.auto_solving = False
                 self.route("home")
             elif key == "resume":
-                self.route(self.paused_page)
+                target = "game" if self.game and self.game.outcome == "playing" else self.paused_page
+                self.route(target)
             elif key == "pause":
                 self.action_menu()
-            elif key == "back":
-                self.route(self.back_page)
             elif key.startswith("open-"):
                 target = {"open-saves":"saves", "open-settings":"settings",
                           "open-achievements":"achievements", "open-editor":"editor"}[key]
-                self.back_page = self.page
                 self.route(target)
             elif key.startswith("settings-"):
                 self.settings_section = key[9:]
