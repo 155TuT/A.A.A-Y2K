@@ -16,19 +16,21 @@
 | `audio.py` | 合成音效、音量与设备生命周期 |
 | `effects.py` | 多箭头和各颗损失生命的独立动画时间线、按箭头 ID 防重复反馈 |
 | `pixels.py` | 像素画、蛇形路径与心碎动画采样、像素命中坐标 |
-| `icons.py` | 菜单的有限调色板像素图标；爱心复用生命渲染器 |
-| `widgets.py` | Textual 栅格控件和鼠标/键盘到格子的适配 |
+| `palette.py` | Textual CSS 与原生界面共用的语义颜色 token |
+| `icons.py` | 菜单像素图标与官方 GitHub 资源的网格采样；爱心复用生命渲染器 |
+| `widgets.py` | Textual 栅格控件、共用像素外观、页面顶栏和鼠标/键盘到格子的适配 |
 | `pages.py` | 各页面组件的组合和布局 |
 | `app.py` | 组合服务、路由、60 Hz 时钟、保存调度及动画协调 |
 | `fonts.py` | 官方字体加载、二值字形栅格、字符宽度规则 |
-| `windowing.py` | SDL 显示器可用区域、窗口定位和全局鼠标捕获 |
-| `desktop.py` | 组合窗口能力、分辨率、系统事件转发与 Textual 帧呈现 |
+| `windowing.py` | SDL 显示器可用区域、窗口定位、鼠标捕获和原生窗口轮廓裁切 |
+| `crt.py` | CRT 外壳、透明轮廓、扫描线与光晕、整屏灰度、实体按键和关机画面 |
+| `desktop.py` | 组合窗口与 CRT 能力、分辨率、系统事件转发及 Textual 帧呈现 |
 | `__main__.py` | 源码和打包程序共用入口，无控制台进程的日志流适配 |
 | `selftest.py` | 源码和冻结程序共用的行为验证套件 |
 
-组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService`、`AudioController` 和 `GameplayEffects`；`PixelHost` 接收 Textual App，并组合 `DesktopGeometry`。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button`/`Select` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
+组合优先：`GameRun` 持有 `GameSession`；`ArrowApp` 组合 `GameRun`、`GameStore`、`AchievementService`、`AudioController` 和 `GameplayEffects`；`PixelHost` 接收 Textual App，并组合 `DesktopGeometry`、`WindowShape` 和 `CrtShell`。业务层无继承链。框架层保留 `App`、`Screen`、`Widget`/`Button`/`Select` 适配和薄的 Page/RasterView 共用行为，不建立按难度或存档类型划分的子类树。
 
-游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。
+游戏状态只由引擎改变，页面读取状态并派发动作。应用用单调时钟结算实际游玩时间；点击和离开游戏页之前也结算尚未消费的时间，确保到期后不能抢点续命。菜单、设置和存档页暂停计时。自动保存与手动保存都调用同一个存储入口，序列化只由 GameRun 提供。`auto_save()` 集中排除失败、无生命或计时耗尽的局面，死亡结算、同帧定时器和退出均不能覆写最后活档。新局、重开、下一关和自制试玩建立初始活档；所有时机都遵守持久化开关。通关快照仍可保存进度，手动槽政策独立于自动槽的存活限制。读取目标槽发生在保存离开局面之前。
 
 采用直接调用与显式数据，不添加插件注册器、通用事件总线或多层仓储。外部 JSON 和生成参数在入口检查；不以捕获所有异常来隐藏实现错误。记录文件采用原子替换，以保护已有进度。
 
@@ -44,13 +46,35 @@
 
 ## 控件状态与原生窗口
 
+`palette.TOKENS` 是 UI 语义颜色的唯一来源；`css_variables()` 经 `ArrowApp.get_css_variables()` 注入 `$aaa-*` CSS 变量，原生绘制通过 `rgb()` 读取相同 token，Rich 文本也直接引用 token。单色偏好属于显示后处理，不复制第二套组件调色板。
+
 `Page` 禁止框架自动聚焦首个按钮，并关闭屏幕级文本选择；`RasterView` 自身也不可选中文字。输入框仍使用 Textual 的文本编辑行为。Button 关闭默认 0.2 秒 active gate，连续操作不被按压动画吞掉。选中设置标签、键盘焦点和鼠标 hover 使用不同样式；应用切页、宿主最小化/恢复和失焦时统一清理旧指针捕获、焦点及按压状态。
 
-`PixelButton` 保留 Textual Button 的事件和标签，仅组合图标绘制内容；`PixelSelect` 保留原生 Select 的键盘和弹层行为，给既有展开指示组件组合一个圆点渲染器。没有另写一套控件命中或导航规则。
+`PixelButton` 保留 Textual Button 的事件、标签和命中规则，以完整像素画面统一边框、悬停填充和内容。可见图标及字形边界作为居中依据，不用字体基线留白推测位置。表单控件组合共用像素外观，保留 Input 编辑、Switch 切换及 Select 的键盘和弹层行为；展开标记由三个像素圆点组成。
 
-`ArrowApp.window_drag_region` 显式保留每页顶部 12 源像素整行，游戏页利用已有空白边距，因此不会压缩棋盘或截获格子点击。`PixelHost` 在该区域捕获鼠标，用桌面坐标与窗口起点计算拖动；不支持全局鼠标坐标的后端使用移动增量。无按键的连续移动事件可合并，所有按键、点击和按住绘制事件保持原顺序。
+除主页和游戏页外，页面组合共用的 `PageHeader`，左侧为垂直居中的标题，右上角“返回主页”按钮使用相同高度和紧凑间距。游戏页保留棋盘及侧栏布局。主页 Esc 路由到退出确认页，取消或再次 Esc 返回主页；其余页面保持 Esc 菜单切换。有存活局面时，菜单“继续游戏”直接返回游戏。
+
+宿主合成按 Textual 的实际层级和裁剪区域叠放原生控件与弹层。按钮可绘制整个区域，普通栅格控件绘制内容区域；tooltip、下拉面板和通知覆盖下方图标，并保持中文字符完整。页面不维护另一套命中或导航规则。
+
+CRT 外壳本身支持拖动，电源与其他实体按键独立命中。`ArrowApp.window_drag_region` 根据共用顶栏的实际高度提供内屏拖动区域；主页及游戏页使用已有的顶部 12 源像素空白边距，不压缩棋盘。`PixelHost` 排除区域中的可交互控件，标题和空白处才捕获鼠标，用桌面坐标与窗口起点计算拖动；不支持全局鼠标坐标的后端使用移动增量。无按键的连续移动事件可合并，所有按键、点击和按住绘制事件保持原顺序。
 
 `windowing.place_window` 使用当前显示器可用区域（含任务栏/Dock 留白），启动时居中，改变分辨率时尽量保留原位置再约束到可见范围。显示器选择使用调整前窗口的交叠面积，避免放大后误跳到相邻显示器；负坐标合法。窗口比可用区域更大时锚定该区域左上角，保持整数像素尺寸并确保顶部仍可拖动。
+
+## CRT 呈现与退出边界
+
+一个 SDL 窗口组合外壳与 Textual 内屏。三档内屏保持 1024×768、1280×720、1920×1080，外壳按内屏整数倍率增加边距：外尺寸为 `(w + 40 × s, h + 74 × s)`，分别为 1104×916、1360×868、2040×1302。窗口定位使用完整外尺寸，页面布局仍使用原逻辑帧尺寸。
+
+`CrtShell` 提供轻微扫描线、噪点及边缘的小幅弧度与透绿色光晕，不改变棋盘、文字或按钮的位置。宿主通过内屏偏移和整数倍率将窗口位置转成 Textual 坐标，命中不需要玻璃形变校正。实体电源按钮请求关闭；+ / − 调用 `adjust_master_volume(±5)`，M 调用 `toggle_display_mode()`。这些按键在关闭期间停止响应。电源符号为居中的粗凿穿形状，填色复用 `LED_YELLOW`，并由凹槽和亮边表现透光。
+
+`Settings.monochrome` 默认 `False`，旧设置文件缺省此字段仍按彩色载入。宿主每帧读取该值，`CrtShell` 在内屏完整合成后应用灰度滤镜，覆盖文字、棋盘、控件、弹层、噪点、反光和 `NO SIGNAL`；玻璃边沿一并变为灰白。机壳、实体按键和指示灯在滤镜范围之外，保持本色。
+
+主音量用整数百分比计算步进并限制到 0–100，再转换回设置中的 0–1 值，避免连续操作累积浮点误差。音频设置页的有效主音量编辑值优先作为起点，无效文本使用持久值；成功后只同步该数字，不提交其他未保存字段。`GameStore.save_settings(candidate)` 验证并原子写入成功后才替换活动设置，随后 `AudioController.configure()` 立即应用主音量。M 的切换复用该持久化入口；失败保留原文件、内存和音频状态，并显示设置错误提示。
+
+`CrtShell.render()` 返回 RGBA，外壳轮廓之外的像素 alpha 为 0。Windows 的 `WindowShape` 通过 `mask_rectangles()` 将同一轮廓压成水平矩形区域，再用 Win32 `SetWindowRgn` 裁切真实 SDL 窗口；因此显示和原生窗口边界一致。其他后端保留可移植帧的透明 alpha，实际桌面窗口以 `CASE` 暖白色作为角部填充。此适配只使用已有依赖及标准库 `ctypes`，macOS/Linux 原生表现尚未在本机验证。
+
+所有退出入口先进入 `ArrowApp.request_desktop_exit()`：结算最后一段实际游戏时间，保存一次可恢复局面，然后设置 `_desktop_closing`，停止规则输入、计时和音频。该边界关闭本次时间结算的周期写入，避免恰好到保存周期时重复写档。重复退出或宿主回调不会再保存；`_desktop_closing` 与 Textual 自身的消息队列关闭标志分离。
+
+有宿主时应用调用 `host_action("close")`，宿主继续绘制约 0.3 秒抖闪及 1 秒 `NO SIGNAL`，结束后调用 `finish_desktop_exit()` 真正退出。没有宿主时直接结束。减少动画设置关闭抖闪和动态噪点，关机过渡仍能展示。退出确认只用于主页 Esc，退出到桌面、快捷键和电源操作直接进入同一关机流程。
 
 ## 难度与快照边界
 
@@ -83,10 +107,10 @@
 from arrow_y2k.app import ArrowApp
 from arrow_y2k.desktop import run_desktop
 
-app = ArrowApp(native=True, seed="my-seed", data_dir="my-player-data")
+app = ArrowApp(seed="my-seed", data_dir="my-player-data")
 await run_desktop(app, resolution="1280x720")
 ```
 
-其他 GUI 宿主也可以运行 `app.run_async(headless=True, size=(106, 30))`，再从 `compose_frame(app, (640, 360))` 取得 RGB 帧。调用前使用 `configure_native_colors(app)`，避免继承终端的 `NO_COLOR`。按整数倍率显示，操作系统鼠标位置先除以最终倍率，再使用 `mouse_message()` 转发到 Textual；文字输入转发 `Key` / `Paste`。已有 `native_frame(width,height)` 控件只负责自身内容区域，由 Textual 决定位置和尺寸。
+其他 GUI 宿主也可以运行 `app.run_async(headless=True, size=(106, 30))`，再从 `compose_frame(app, (640, 360))` 取得 RGB 帧。调用前使用 `configure_native_colors(app)`，确保采用统一的真彩色调色板。按整数倍率显示，操作系统鼠标位置先除以最终倍率，再使用 `mouse_message()` 转发到 Textual；文字输入转发 `Key` / `Paste`。已有 `native_frame(width,height)` 控件由 Textual 决定位置和尺寸；默认负责内容区域，声明 `native_full_region` 的控件负责完整区域，合成器再应用裁剪和层级。
 
-Textual 不原生管理操作系统窗口装饰，也不能设置外部终端窗口的像素尺寸，所以无边框和三个预设由薄宿主承担。宿主合成器对 `screen._compositor` 的内部依赖集中在一个适配函数；框架版本锁定并有端到端消息测试。当前未实现其他应用的 HWND 子窗口嵌入，导出的是可复用的帧和事件接口。
+源码 `run.py` 与打包产物共用 `__main__.py`，统一启动 SDL 窗口中的 Textual 界面。Textual 管理页面和输入，宿主组合 CRT 外壳，管理无边框窗口、三个内屏分辨率预设和整数像素显示。宿主合成器对 `screen._compositor` 的内部依赖集中在一个适配函数；框架版本锁定并有端到端消息测试。当前未实现其他应用的 HWND 子窗口嵌入，导出的是可复用的帧和事件接口。
