@@ -41,7 +41,7 @@ async def source_host(output):
     from textual.widgets import Button
 
     with tempfile.TemporaryDirectory(prefix="native-host-", dir=ROOT / ".artifacts") as data:
-        app = ArrowApp(native=True, seed="native-window-check", data_dir=data)
+        app = ArrowApp(seed="native-window-check", data_dir=data)
         host = PixelHost(app)
         task = asyncio.create_task(host.run(quit_after=20))
         record = {}

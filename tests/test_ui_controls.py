@@ -10,7 +10,7 @@ from arrow_y2k.widgets import PixelButton, PixelSelect
 
 
 def make_app(path):
-    app = ArrowApp(native=True, data_dir=path, clock=lambda: 0.0, seed="controls")
+    app = ArrowApp(data_dir=path, clock=lambda: 0.0, seed="controls")
     app.audio.play = lambda _: True
     app.host_action = lambda _: None
     configure_native_colors(app)

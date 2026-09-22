@@ -1,8 +1,8 @@
 """One owner for short, generated retro effects; no audio assets or network.
 
 Settings are retained by this controller and can be serialised by the app's
-settings repository. SDL mixer is opened lazily, so terminal sessions and
-machines without an audio device remain fully playable.
+settings repository. SDL mixer is opened lazily, so headless verification does
+not open an audio device and machines without one remain fully playable.
 """
 
 from __future__ import annotations

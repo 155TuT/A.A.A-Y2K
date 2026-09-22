@@ -34,7 +34,7 @@ class FakeClock:
 
 def make_app(tmp_path):
     clock = FakeClock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock, seed="page-tests")
+    app = ArrowApp(data_dir=tmp_path, clock=clock, seed="page-tests")
     app.store.profile.unlocked_modes.update(("medium", "hard", "endless"))
     # These tests exercise UI capability dispatch, not the machine's speakers.
     app.audio.play = lambda event: True

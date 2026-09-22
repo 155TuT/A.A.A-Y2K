@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from .achievements import AchievementService
 from .campaign import GameRun, difficulty_for_level
@@ -21,6 +21,29 @@ from .generation import GenerateConfig, generate, template_mask
 from .model import Arrow, Board, Direction, GameSession
 from .solver import solve, validate_certificate
 from .storage import DomainStorageError, GameStore, Profile
+
+
+class LaunchContract(unittest.TestCase):
+    def test_source_and_binary_entrypoint_always_use_native_host(self):
+        from .__main__ import main
+        with tempfile.TemporaryDirectory(prefix="aaa-launch-") as directory:
+            args = ["game", "--resolution", "1024x768", "--data-dir", directory, "--seed", "launch-test"]
+            with patch.object(sys, "argv", args), patch("arrow_y2k.app.ArrowApp") as factory:
+                with patch("arrow_y2k.desktop.run_desktop", new_callable=AsyncMock) as host:
+                    main()
+                    factory.assert_called_once_with(seed="launch-test", data_dir=Path(directory))
+                    host.assert_awaited_once_with(factory.return_value, resolution="1024x768",
+                                                  screenshot_path=None, quit_after=None)
+                    factory.return_value.run.assert_not_called()
+
+    def test_terminal_flag_is_rejected_before_creating_player_state(self):
+        from .__main__ import main
+        with patch.object(sys, "argv", ["game", "--terminal"]):
+            with patch("arrow_y2k.__main__.prepare_windowed_streams") as prepare:
+                with self.assertRaises(SystemExit) as stopped:
+                    main()
+                self.assertEqual(stopped.exception.code, 2)
+                prepare.assert_not_called()
 
 
 class RulesContract(unittest.TestCase):
@@ -363,7 +386,7 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="aaa-textual-contract-")
         self.addCleanup(self.temporary.cleanup)
         self.clock = FixedClock()
-        self.app = ArrowApp(native=False, seed="shared-ui", data_dir=Path(self.temporary.name), clock=self.clock)
+        self.app = ArrowApp(seed="shared-ui", data_dir=Path(self.temporary.name), clock=self.clock)
 
     async def test_home_and_global_escape_from_settings(self):
         from .pages import HomePage, PausePage, SettingsPage
@@ -510,7 +533,6 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
     async def test_native_host_exports_integer_scaled_frame(self):
         from PIL import Image, ImageChops
         from .desktop import run_desktop
-        self.app.native = True
         path = Path(self.temporary.name) / "native-frame.png"
         with patch.dict("os.environ", {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy",
                                        "PYGAME_HIDE_SUPPORT_PROMPT": "1"}):
@@ -521,7 +543,7 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
             import pygame
             from .app import ArrowApp
             for source in ("sdl", "textual"):
-                closing = ArrowApp(native=True, data_dir=Path(self.temporary.name) / source)
+                closing = ArrowApp(data_dir=Path(self.temporary.name) / source)
                 async def close_soon():
                     await asyncio.sleep(0.08)
                     if source == "sdl":
@@ -538,7 +560,7 @@ class TextualContract(unittest.IsolatedAsyncioTestCase):
 
 
 CONTRACT_CLASSES = (
-    RulesContract, GeneratorContract, CampaignContract, StorageContract,
+    LaunchContract, RulesContract, GeneratorContract, CampaignContract, StorageContract,
     AchievementsContract, FontContract, TextualContract,
 )
 

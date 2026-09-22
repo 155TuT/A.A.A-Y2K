@@ -1,5 +1,5 @@
 """Pytest discovers these very same unittest classes; no copied assertions."""
 from arrow_y2k.selftest import (
-    RulesContract, GeneratorContract, CampaignContract, StorageContract,
+    LaunchContract, RulesContract, GeneratorContract, CampaignContract, StorageContract,
     AchievementsContract, FontContract, TextualContract,
 )

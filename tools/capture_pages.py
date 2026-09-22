@@ -34,7 +34,7 @@ class CaptureClock:
 async def capture_resolution(name, output, fixture_root):
     preset = RESOLUTIONS[name]
     clock = CaptureClock()
-    app = ArrowApp(native=True, data_dir=fixture_root / name, clock=clock, seed="capture-pages-2026")
+    app = ArrowApp(data_dir=fixture_root / name, clock=clock, seed="capture-pages-2026")
     app.store.settings.muted = True
     app.audio.configure(.65, .7, True)
     app.store.profile.unlocked_modes.update(("medium", "hard", "endless"))

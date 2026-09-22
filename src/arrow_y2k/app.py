@@ -33,9 +33,8 @@ class ArrowApp(App):
         ("h", "hint", "提示"), ("s", "solve", "演示"), ("r", "restart", "重来"),
     ]
 
-    def __init__(self, *, native=False, seed=None, data_dir=None, clock=time.monotonic):
+    def __init__(self, *, seed=None, data_dir=None, clock=time.monotonic):
         super().__init__()
-        self.native = native
         self.clock = clock
         self.seed = seed
         self.store = GameStore(Path(data_dir) if data_dir is not None else None)
@@ -173,7 +172,7 @@ class ArrowApp(App):
             toast.set_class(bool(self.toast_text), "show-toast")
 
     def sound(self, event):
-        if self.native and self.host_action is not None:
+        if self.host_action is not None:
             self.audio.play(event)
 
     def show_toast(self, title, description=""):

@@ -54,7 +54,7 @@ async def finish(app, pilot, clock):
 @pytest.mark.parametrize("failure", ["timeout", "lives"])
 async def test_failure_routes_to_result_and_resets_official_streak(tmp_path, failure):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock, seed="test")
+    app = ArrowApp(data_dir=tmp_path, clock=clock, seed="test")
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "medium", blocked=True)
         app.store.profile.current_streak = 5
@@ -77,7 +77,7 @@ async def test_failure_routes_to_result_and_resets_official_streak(tmp_path, fai
 
 async def test_clear_waits_for_animation_then_next_enters_correct_tier(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, level=3, count=1)
         app.play_arrow("a0")
@@ -96,7 +96,7 @@ async def test_clear_waits_for_animation_then_next_enters_correct_tier(tmp_path)
 
 async def test_fiftieth_level_shows_campaign_completion_and_unlocks_endless(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, mode="hard", level=50, count=1)
         app.play_arrow("a0")
@@ -109,7 +109,7 @@ async def test_fiftieth_level_shows_campaign_completion_and_unlocks_endless(tmp_
 
 async def test_assisted_solver_does_not_award_arrows_unlocks_or_streak(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, level=3)
         app.store.profile.current_streak = 4
@@ -129,7 +129,7 @@ async def test_assisted_solver_does_not_award_arrows_unlocks_or_streak(tmp_path)
 
 async def test_endless_clear_auto_advances_and_restoring_boundary_save_continues(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "endless")
         await step(app, pilot, clock, 4.25)
@@ -153,7 +153,7 @@ async def test_endless_clear_auto_advances_and_restoring_boundary_save_continues
 
 async def test_hundredth_endless_combo_finishes_midboard_and_records_fastest_time(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "endless", count=3)
         app.store.profile.endless_best_seconds = 12.0
@@ -171,7 +171,7 @@ async def test_hundredth_endless_combo_finishes_midboard_and_records_fastest_tim
 
 async def test_repeatedly_loaded_completed_results_do_not_double_count(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, level=3, count=1)
         app.play_arrow("a0")
@@ -187,7 +187,7 @@ async def test_repeatedly_loaded_completed_results_do_not_double_count(tmp_path)
 
 async def test_loading_unprocessed_winning_snapshot_accounts_result_once(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, level=3, count=1)
         app.play_arrow("a0")
@@ -205,7 +205,7 @@ async def test_loading_unprocessed_winning_snapshot_accounts_result_once(tmp_pat
 @pytest.mark.parametrize("corruption", ["json", "snapshot"])
 async def test_malformed_slot_load_preserves_current_game_and_file(tmp_path, corruption):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         await install(app, pilot)
         app.store.save_slot(1, app.game)
@@ -227,7 +227,7 @@ async def test_malformed_slot_load_preserves_current_game_and_file(tmp_path, cor
 
 async def test_click_after_deadline_cannot_beat_timeout_before_next_frame(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, mode="medium", count=1)
         arrows_before = app.store.profile.total_arrows
@@ -244,7 +244,7 @@ async def test_click_after_deadline_cannot_beat_timeout_before_next_frame(tmp_pa
 
 async def test_load_auto_slot_reads_requested_snapshot_before_saving_outgoing_game(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         await install(app, pilot)
         outgoing = app.game.to_dict()
@@ -262,7 +262,7 @@ async def test_load_auto_slot_reads_requested_snapshot_before_saving_outgoing_ga
 async def test_first_real_canvas_edit_awards_and_persists_before_map_save(tmp_path):
     from arrow_y2k.storage import GameStore
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         app.dispatch("open-editor")
         await pilot.pause()
@@ -283,7 +283,7 @@ async def test_first_real_canvas_edit_awards_and_persists_before_map_save(tmp_pa
 async def test_profile_write_failure_keeps_playable_progress_and_reports_error(tmp_path, monkeypatch):
     from arrow_y2k.storage import DomainStorageError, GameStore
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, count=3)
         original = app.store.save_profile
@@ -305,7 +305,7 @@ async def test_profile_write_failure_keeps_playable_progress_and_reports_error(t
 @pytest.mark.parametrize("count", [2, 3])
 async def test_zero_interval_clicks_remove_different_arrows_with_independent_animations(tmp_path, count):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, count=count)
         before = clock.value
@@ -327,7 +327,7 @@ async def test_zero_interval_clicks_remove_different_arrows_with_independent_ani
 
 async def test_busy_collision_is_not_charged_twice_and_another_arrow_still_moves(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "medium", count=3, blocked=True)
         app.play_arrow("a0")
@@ -347,7 +347,7 @@ async def test_busy_collision_is_not_charged_twice_and_another_arrow_still_moves
 
 async def test_two_shattered_hearts_keep_independent_timelines_and_pause_together(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "medium", count=3)
         game.session = GameSession(Board(frozenset({(0,0),(1,0),(2,0)}), (
@@ -380,7 +380,7 @@ async def test_two_shattered_hearts_keep_independent_timelines_and_pause_togethe
 
 async def test_life_failure_waits_for_shatter_after_collision_motion_ends(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, "endless", blocked=True)
         assert game.session.lives == 1
@@ -395,7 +395,7 @@ async def test_life_failure_waits_for_shatter_after_collision_motion_ends(tmp_pa
 
 async def test_last_arrow_waits_for_all_inflight_visuals_before_result(tmp_path):
     clock = Clock()
-    app = ArrowApp(native=True, data_dir=tmp_path, clock=clock)
+    app = ArrowApp(data_dir=tmp_path, clock=clock)
     async with app.run_test(size=(106, 30)) as pilot:
         game = await install(app, pilot, count=2, blocked=True)
         app.play_arrow("a0")

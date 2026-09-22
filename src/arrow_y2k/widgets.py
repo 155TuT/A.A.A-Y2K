@@ -1,7 +1,6 @@
-"""Raster widget inheritance shares native/terminal presentation and hit geometry."""
+"""Textual input adapters composed with native integer-pixel renderers."""
 from PIL import Image, ImageDraw
 from rich.text import Text
-from rich.style import Style
 from rich.cells import cell_len
 from textual.widgets import Button, Select, Static
 from .icons import pixel_icon
@@ -13,17 +12,6 @@ from .fonts import draw_text
 from .canvas import CANVAS_WIDTH as EDITOR_WIDTH, CANVAS_HEIGHT as EDITOR_HEIGHT
 
 
-def half_blocks(image):
-    image = image.convert("RGB")
-    result = Text(no_wrap=True, overflow="crop")
-    pixels = image.load()
-    for y in range(0, image.height, 2):
-        for x in range(image.width):
-            top, bottom = pixels[x, y], pixels[x, min(y + 1, image.height - 1)]
-            result.append("▀", Style(color="#%02x%02x%02x" % top, bgcolor="#%02x%02x%02x" % bottom))
-        if y + 2 < image.height:
-            result.append("\n")
-    return result
 
 
 class RasterView(Widget):
@@ -32,9 +20,7 @@ class RasterView(Widget):
         raise NotImplementedError
 
     def render(self):
-        if self.app.native:
-            return Text("")
-        return half_blocks(self.native_frame(max(1, self.size.width), max(2, self.size.height * 2)))
+        return Text("")
 
 
 class PixelButton(Button):
@@ -64,11 +50,7 @@ class PixelButton(Button):
         return frame
 
     def render(self):
-        if getattr(self.app, "native", False):
-            return Text("")
-        if self.icon_only:
-            return Text({"exit": "→", "github": "GH"}.get(self.icon, self.label.plain))
-        return super().render()
+        return Text("")
 
 
 class DisclosureArt:
@@ -109,8 +91,6 @@ class CreditsView(RasterView):
         draw_text(frame, (left + heart.width, top), self.SUFFIX, color)
         return frame
 
-    def render(self):
-        return Text("") if self.app.native else Text(self.PREFIX + "♥" + self.SUFFIX, justify="center", style="#668474")
 
 
 class TitleView(RasterView):
@@ -125,8 +105,6 @@ class TitleView(RasterView):
         frame.paste(image, ((width - image.width) // 2, (height - image.height) // 2))
         return frame
 
-    def render(self):
-        return Text("") if self.app.native else Text(self.TEXT, justify="center", style="#72d69c")
 
 
 class BoardView(RasterView):
@@ -157,21 +135,11 @@ class BoardView(RasterView):
                             hint=app.hint_id, animations=animations,
                             cursor=app.cursor if self.has_focus else None, red_ids=app.failed_ids)
 
-    def render(self):
-        if not self.app.native:
-            geometry = board_metrics(max(1, self.size.width), max(2, self.size.height * 2), self.mask)
-            if geometry.origin_x < 0 or geometry.origin_y < 0:
-                return Text(f"终端空间不足\n棋盘需要 {geometry.image_width} 列 × {(geometry.image_height + 1) // 2} 行。\n请使用原生像素窗口，或放大终端。")
-        return super().render()
 
     def cell_at(self, event):
-        if self.app.native:
-            x = round(event.pointer_screen_x * 6) - self.content_region.x * 6
-            y = round(event.pointer_screen_y * 12) - self.content_region.y * 12
-            width, height = self.content_size.width * 6, self.content_size.height * 12
-        else:
-            x, y = int(event.x), int(event.y) * 2
-            width, height = self.size.width, self.size.height * 2
+        x = round(event.pointer_screen_x * 6) - self.content_region.x * 6
+        y = round(event.pointer_screen_y * 12) - self.content_region.y * 12
+        width, height = self.content_size.width * 6, self.content_size.height * 12
         geometry = board_metrics(max(1, width), max(1, height), self.mask)
         if geometry.origin_x < 0 or geometry.origin_y < 0:
             return None
@@ -249,13 +217,6 @@ class SaveHearts(RasterView):
         frame.paste(image, (left, max(0, (height - image.height) // 2)))
         return frame
 
-    def render(self):
-        if self.app.native:
-            return Text("")
-        text = half_blocks(self.art().resize((24, 12), Image.Resampling.NEAREST))
-        if self.centered:
-            text.justify = "center"
-        return text
 
 
 class HeartsView(SaveHearts):

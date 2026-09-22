@@ -26,7 +26,6 @@ def prepare_windowed_streams(data_dir: Path | None = None):
 
 def main():
     parser = argparse.ArgumentParser(description="ARROW.AFTER.ARROW-Y2K")
-    parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--resolution", choices=("1024x768", "1280x720", "1920x1080"))
     parser.add_argument("--seed", help="固定新游戏种子；默认每次新建使用新种子")
     parser.add_argument("--data-dir", type=Path, help="独立用户数据目录（测试或便携使用）")
@@ -40,16 +39,13 @@ def main():
         raise SystemExit(run_self_tests(args.test_report))
     prepare_windowed_streams(args.data_dir)
     from .app import ArrowApp
-    app = ArrowApp(native=not args.terminal, seed=args.seed, data_dir=args.data_dir)
+    app = ArrowApp(seed=args.seed, data_dir=args.data_dir)
     if args.resolution:
         app.resolution_name = args.resolution
         app.store.settings.resolution = args.resolution
-    if args.terminal:
-        app.run()
-    else:
-        from .desktop import run_desktop
-        asyncio.run(run_desktop(app, resolution=app.resolution_name,
-                                screenshot_path=args.screenshot, quit_after=args.quit_after))
+    from .desktop import run_desktop
+    asyncio.run(run_desktop(app, resolution=app.resolution_name,
+                            screenshot_path=args.screenshot, quit_after=args.quit_after))
 
 
 if __name__ == "__main__":
